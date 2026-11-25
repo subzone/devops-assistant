@@ -48,12 +48,15 @@ k8sh unlock --context eks-prod --namespace payments --action delete --target pod
 ```
 Claude can then call `destructive_delete` exactly once for that target. `k8sh actions` lists the actions, `k8sh grants` shows active grants, `k8sh lock` revokes them all.
 
-## Context tiers
+## Configuration
 
-`~/.k8sh/config.json` (contexts not listed count as **prod**):
-```json
-{ "contexts": { "kind-dev": {"tier": "dev"}, "aks-staging": {"tier": "staging"} }, "maxGrantTTLMinutes": 10 }
+`/k8s-handler:setup` configures everything. Or by hand:
+```bash
+k8sh config set-tier k3d-mycluster dev      # contexts not listed count as prod
+k8sh config set-ttl 10                      # grant TTL ceiling, 1-15 min
+k8sh settings apply --statusline "k8sh statusline"   # add-only merge into ~/.claude/settings.json, keeps .bak
 ```
+Tiers are labels: destructive actions stay locked on every tier.
 
 ## MCP tools
 

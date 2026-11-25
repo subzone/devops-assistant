@@ -22,6 +22,9 @@ Grants and the HMAC key are stored in `~/.k8sh` and owned by your OS user. The h
 - `/k8s-handler:unlock` only **prints** the command. You run `k8sh unlock` yourself in a separate terminal. Chat input can't be trusted as a confirmation channel.
 - Claude Desktop elicitation-based confirmation is on the roadmap.
 
+### Local configuration is not locked
+`k8sh config` (tiers, TTL ceiling 1-15 min) and `k8sh settings apply` (add-only deny rules + status line) can be run by Claude. Neither can weaken the lock: tiers never relax it, the TTL ceiling can't exceed 15 minutes, and settings merge only adds rules. Direct file access to `~/.k8sh` (grants, signing key, audit log) stays blocked.
+
 ## Credentials
 - **Redaction** (`internal/redact`) runs on every value k8sh returns and on the audit log: Secret `data`/`stringData` (keys stay visible), `last-applied-configuration`, sensitive env values, and token patterns (JWT, AWS, GitHub, Slack, Grafana, PEM, URL credentials, Authorization headers, key=value pairs).
 - **Blocked reads:** `kubectl get secret -o …`, `config view --raw`, `base64 -d`, env dumps, and `~/.kube`, `~/.aws`, `~/.azure`, gcloud config, `.env`, `*.pem|key|p12`.

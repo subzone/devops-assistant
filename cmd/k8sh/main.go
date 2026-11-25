@@ -19,6 +19,7 @@ import (
 	"github.com/subzone/k8s-handler/internal/guard"
 	"github.com/subzone/k8s-handler/internal/kube"
 	"github.com/subzone/k8s-handler/internal/mcp"
+	"github.com/subzone/k8s-handler/internal/settings"
 	"github.com/subzone/k8s-handler/internal/validate"
 )
 
@@ -36,6 +37,11 @@ Usage:
   k8sh actions                     list actions that require a grant
   k8sh validate PATH [--strict] [--context C]
                                    run the validation pipeline (exit 1 on failure)
+  k8sh config show                 show context tiers and grant TTL ceiling
+  k8sh config set-tier CONTEXT dev|staging|prod
+  k8sh config set-ttl MINUTES      grant TTL ceiling (1-15)
+  k8sh settings apply [--path P] [--statusline CMD] [--force-statusline] [--dry-run]
+                                   merge deny-list + status line into Claude settings (add-only, .bak kept)
   k8sh statusline                  one-line status for the Claude Code status line
   k8sh audit [--tail N]            show the redacted audit log
   k8sh version
@@ -89,6 +95,10 @@ func main() {
 		for _, k := range keys {
 			fmt.Printf("%-20s %s\n", k, grant.Actions[k])
 		}
+	case "config":
+		runConfig(cfg, os.Args[2:])
+	case "settings":
+		runSettings(os.Args[2:])
 	case "validate":
 		runValidate(ctx, os.Args[2:])
 	case "statusline":
@@ -209,6 +219,57 @@ func runValidate(ctx context.Context, args []string) {
 	if !r.Passed {
 		os.Exit(1)
 	}
+}
+
+func runConfig(cfg *config.Config, args []string) {
+	if len(args) == 0 {
+		args = []string{"show"}
+	}
+	switch args[0] {
+	case "show":
+		json.NewEncoder(os.Stdout).Encode(map[string]any{
+			"contexts":           cfg.Contexts,
+			"maxGrantTTLMinutes": cfg.MaxTTLMinutes(),
+			"note":               "contexts not listed are treated as prod; tiers never relax the destructive-action lock",
+		})
+		return
+	case "set-tier":
+		if len(args) != 3 {
+			fail("usage: k8sh config set-tier CONTEXT dev|staging|prod")
+		}
+		must(cfg.SetTier(args[1], config.Tier(args[2])))
+	case "set-ttl":
+		var m int
+		if len(args) != 2 {
+			fail("usage: k8sh config set-ttl MINUTES")
+		}
+		fmt.Sscanf(args[1], "%d", &m)
+		must(cfg.SetMaxTTL(m))
+	default:
+		fail("unknown config subcommand " + args[0])
+	}
+	must(cfg.Save())
+	home, _ := config.Home()
+	audit.Write(home, audit.Record{Source: "cli", Event: "config " + args[0], Outcome: "saved", Detail: map[string]any{"args": args[1:]}})
+	fmt.Println("saved", strings.Join(args, " "))
+}
+
+func runSettings(args []string) {
+	if len(args) == 0 || args[0] != "apply" {
+		fail("usage: k8sh settings apply [--path P] [--statusline CMD] [--force-statusline] [--dry-run]")
+	}
+	def, _ := settings.DefaultPath()
+	fs := flag.NewFlagSet("settings", flag.ExitOnError)
+	path := fs.String("path", def, "Claude Code settings.json")
+	sl := fs.String("statusline", "", "status line command to set (empty = leave alone)")
+	force := fs.Bool("force-statusline", false, "replace an existing status line")
+	dry := fs.Bool("dry-run", false, "show what would change")
+	fs.Parse(args[1:])
+	r, err := settings.Apply(*path, *sl, *force, *dry)
+	must(err)
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	enc.Encode(r)
 }
 
 func statusline(ctx context.Context, home string, cfg *config.Config) {

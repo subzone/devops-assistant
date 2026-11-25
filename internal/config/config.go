@@ -87,3 +87,47 @@ func (c *Config) MaxTTLMinutes() int {
 	}
 	return m
 }
+
+// Save writes config.json atomically (0600).
+func (c *Config) Save() error {
+	h, err := EnsureHome()
+	if err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := filepath.Join(h, "config.json.tmp")
+	if err := os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, filepath.Join(h, "config.json"))
+}
+
+// SetTier labels a context. Tiers are labels for display and policy; they
+// never relax the destructive-action lock.
+func (c *Config) SetTier(ctx string, t Tier) error {
+	switch t {
+	case TierDev, TierStaging, TierProd:
+	default:
+		return errors.New("tier must be dev, staging or prod")
+	}
+	if ctx == "" {
+		return errors.New("context is required")
+	}
+	if c.Contexts == nil {
+		c.Contexts = map[string]Context{}
+	}
+	c.Contexts[ctx] = Context{Tier: t}
+	return nil
+}
+
+// SetMaxTTL sets the grant TTL ceiling (1..15 minutes).
+func (c *Config) SetMaxTTL(m int) error {
+	if m < 1 || m > HardMaxTTLMinutes {
+		return errors.New("maxGrantTTLMinutes must be between 1 and 15")
+	}
+	c.MaxGrantTTLMinutes = m
+	return nil
+}
