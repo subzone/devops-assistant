@@ -47,6 +47,7 @@ Looks like a plain window: no status bar, mouse on, thin divider, its own tmux s
  ⏎ expand  e events  l logs  f →Claude  u unlock  c ctx  r refresh  ? help  q quit
 ```
 - Mouse: click to select, click again or click the arrow to expand; wheel scrolls; click tabs.
+- Back: `esc`/`backspace` closes logs/events, collapses, then goes up a level; `0` collapses all and jumps to the top; the breadcrumb (`⌂ Cluster › payments › api › api-1`) is clickable; clicking the active tab also collapses all.
 - `f` sends the selection to Claude, then ask `/k8s-handler:explain`.
 - `u` issues a single-use grant for the selected pod/workload after you type the context name. It works only in your own terminal, never inside Claude.
 - Views: Cluster (namespaces → workloads → pods → containers), Argo CD (apps → resources), RCA (ranked findings + warnings), Lock (grants, tiers).

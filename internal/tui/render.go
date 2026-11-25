@@ -51,7 +51,7 @@ func fit(s string, w int) string {
 }
 
 func (a *App) bodyRows() int {
-	r := a.rows - 4
+	r := a.rows - 5
 	if r < 3 {
 		r = 3
 	}
@@ -122,8 +122,39 @@ func (a *App) draw() {
 	// line 2: separator
 	lw := a.leftWidth()
 	rw := cols - lw - 1
+	// line 2: clickable breadcrumb (⌂ = top level), then separator
+	a.crumbs = a.crumbs[:0]
+	path := a.breadcrumb()
+	col := 1
+	var bc strings.Builder
+	addSeg := func(text string, n *node, last bool) {
+		w := utf8.RuneCountInString(text)
+		if col+w > cols-1 {
+			return
+		}
+		a.crumbs = append(a.crumbs, crumb{x0: col, x1: col + w, n: n})
+		if last {
+			bc.WriteString(bold + text + reset)
+		} else {
+			bc.WriteString(cyan + text + reset)
+		}
+		col += w
+	}
+	addSeg(" ⌂ "+tabs[a.tab]+" ", nil, len(path) <= 1)
+	if len(path) > 1 {
+		for i, n := range path {
+			bc.WriteString(dim + "›" + reset)
+			col++
+			lbl := n.label
+			if n.name != "" {
+				lbl = n.name
+			}
+			addSeg(" "+strings.TrimRight(fit(lbl, 28), " ")+" ", n, i == len(path)-1)
+		}
+	}
+	o.WriteString(bc.String() + "\x1b[K\r\n")
 	o.WriteString(dim + strings.Repeat("─", lw) + "┬" + strings.Repeat("─", max(rw, 0)) + reset + "\x1b[K\r\n")
-	a.listTop = 3
+	a.listTop = 4
 
 	// body
 	v := a.visible()
@@ -183,7 +214,7 @@ func (a *App) draw() {
 	// footer
 	m := a.msg
 	o.WriteString(dim + strings.Repeat("─", cols) + reset + "\x1b[K\r\n")
-	keys := "⏎ expand  e events  l logs  f →Claude  u unlock  c ctx  r refresh  ? help  q quit"
+	keys := "⏎ expand  esc back  0 top  e events  l logs  f →Claude  u unlock  c ctx  r refresh  ? help  q quit"
 	if m != "" {
 		o.WriteString(yellow + fit(" "+m, cols) + reset)
 	} else {

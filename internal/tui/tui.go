@@ -19,6 +19,11 @@ import (
 	"github.com/subzone/k8s-handler/internal/kube"
 )
 
+type crumb struct {
+	x0, x1 int
+	n      *node
+}
+
 var tabs = []string{"Cluster", "Argo CD", "RCA", "Lock"}
 
 type App struct {
@@ -41,6 +46,7 @@ type App struct {
 	out      *bufio.Writer
 	listTop  int
 	tabStart int
+	crumbs   []crumb
 }
 
 func Run(ctx context.Context, home string, cfg *config.Config) error {
@@ -284,6 +290,17 @@ func (a *App) handle(b []byte, keys <-chan []byte) bool {
 			a.ensureTab()
 			s = s[3:]
 			continue
+		case strings.HasPrefix(s, "\x1b[H"), strings.HasPrefix(s, "\x1b[1~"), strings.HasPrefix(s, "\x1bOH"):
+			a.top(false)
+			s = s[strings.IndexAny(s[1:], "H~")+2:]
+			continue
+		case strings.HasPrefix(s, "\x1b[F"), strings.HasPrefix(s, "\x1b[4~"), strings.HasPrefix(s, "\x1bOF"):
+			a.move(1 << 20)
+			s = s[strings.IndexAny(s[1:], "F~")+2:]
+			continue
+		case s == "\x1b":
+			a.back()
+			return false
 		case s[0] == 0x1b:
 			s = s[1:]
 			continue
@@ -299,6 +316,14 @@ func (a *App) handle(b []byte, keys <-chan []byte) bool {
 			a.move(-1)
 		case 'h':
 			a.collapseOrParent()
+		case 0x7f, 0x08, 'b':
+			a.back()
+		case 'g':
+			a.top(false)
+		case 'G':
+			a.move(1 << 20)
+		case '0', 'H':
+			a.top(true)
 		case 'J':
 			a.dscroll += 5
 		case 'K':
@@ -360,6 +385,62 @@ func (a *App) collapseOrParent() {
 	}
 }
 
+// back: close detail overlay, else collapse, else go to parent and collapse it.
+func (a *App) back() {
+	if a.extra != nil {
+		a.extra, a.dscroll = nil, 0
+		return
+	}
+	n := a.current()
+	if n == nil {
+		return
+	}
+	if n.expanded {
+		n.expanded = false
+		return
+	}
+	if p := n.parent; p != nil {
+		p.expanded = false
+		a.selectNode(p)
+	}
+}
+
+// top jumps to the first row; collapse=true also folds every tree.
+func (a *App) top(collapse bool) {
+	if collapse {
+		var fold func(ns []*node)
+		fold = func(ns []*node) {
+			for _, n := range ns {
+				n.expanded = false
+				fold(n.children)
+			}
+		}
+		fold(a.roots[a.tab])
+		a.msg = "collapsed to top level"
+	}
+	a.sel[a.tab], a.off[a.tab] = 0, 0
+	a.extra, a.dscroll = nil, 0
+}
+
+func (a *App) selectNode(t *node) {
+	for i, v := range a.visible() {
+		if v == t {
+			a.sel[a.tab] = i
+			break
+		}
+	}
+	a.extra, a.dscroll = nil, 0
+}
+
+// breadcrumb returns the path from the root to the selection.
+func (a *App) breadcrumb() []*node {
+	var path []*node
+	for n := a.current(); n != nil; n = n.parent {
+		path = append([]*node{n}, path...)
+	}
+	return path
+}
+
 func (a *App) mouse(params string, press bool) {
 	p := strings.Split(params, ";")
 	if len(p) != 3 || !press {
@@ -384,11 +465,29 @@ func (a *App) mouse(params string, press bool) {
 		for i, t := range tabs {
 			w := utf8.RuneCountInString(t) + 3
 			if x >= pos && x < pos+w {
+				if i == a.tab {
+					a.top(true)
+					return
+				}
 				a.tab = i
 				a.ensureTab()
 				return
 			}
 			pos += w
+		}
+		return
+	}
+	if y == 2 { // breadcrumb click
+		for _, c := range a.crumbs {
+			if x >= c.x0 && x < c.x1 {
+				if c.n == nil {
+					a.top(true)
+				} else {
+					c.n.expanded = false
+					a.selectNode(c.n)
+				}
+				return
+			}
 		}
 		return
 	}
@@ -581,6 +680,9 @@ var helpLines = []string{
 	"",
 	"↑/↓ j/k        move          click     select / toggle",
 	"enter/space →  expand        ←/h       collapse / parent",
+	"esc/backspace  back (close logs/events, collapse, go up)",
+	"0/H            collapse all, back to top    g/G  first/last",
+	"click a breadcrumb segment to jump back; click the active tab to collapse all",
 	"tab 1-4        switch view   wheel     scroll",
 	"J/K            scroll detail PgUp/PgDn page",
 	"e              events        l         logs (pod/container)",
