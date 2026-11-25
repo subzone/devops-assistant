@@ -42,6 +42,7 @@ type Client struct {
 func New() *Client { return &Client{Exec: DefaultExec, Kubectl: "kubectl"} }
 
 var safeName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,252}$`)
+var safeKind = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.,/-]{0,252}$`)
 var safeSelector = regexp.MustCompile(`^[A-Za-z0-9._/=!,() -]{1,512}$`)
 
 func check(field, v string) error {
@@ -114,7 +115,7 @@ func (s Scope) args(allNS bool) ([]string, error) {
 }
 
 func (c *Client) GetJSON(ctx context.Context, s Scope, kind, name, selector string, allNS bool) ([]byte, error) {
-	if err := check("kind", kind); err != nil || kind == "" {
+	if !safeKind.MatchString(kind) {
 		return nil, fmt.Errorf("invalid kind %q", kind)
 	}
 	if err := check("name", name); err != nil {

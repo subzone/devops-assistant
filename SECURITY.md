@@ -12,6 +12,7 @@ k8s-handler has two rules that no setting turns off:
 | MCP tools | `destructive_*` tools refuse without a matching grant and consume it on use. Each attempt is audited. | `internal/mcp/tools.go` |
 | Grants | Single use, exact scope (context + namespace + action + `kind/name`, no wildcards), max 15 min, HMAC-signed. Issued only by `k8sh unlock` from a controlling terminal, after the user types the context name. Refused when `CLAUDECODE`/`K8SH_AGENT` is set. | `internal/grant` |
 | PreToolUse hook | Blocks destructive `kubectl`/`helm`/`argocd`/`ansible`/`velero`/cloud-CLI/`terraform` commands, force-push, `k8sh unlock`, access to `~/.k8sh`, and pseudo-terminal tools. Fails closed on bad input and when the binary is missing. | `internal/guard`, `hooks/hooks.json`, `bin/k8sh-launch` |
+| Keystroke injection | The hook blocks `tmux send-keys`/`paste-buffer`, `wezterm cli send-text`, `kitty @ send-text`, `xdotool`/`ydotool`/`wtype` and `osascript` keystrokes, so Claude can't type a confirmation into your terminal or the TUI. | `internal/guard` |
 | Kubernetes RBAC | The agent identity should be read-only: `docs/rbac/agent-readonly.yaml`. | your cluster |
 | Argo CD | `automated.prune: false` by default, so pruning needs a `sync-prune` grant. | `skills/gitops-authoring` |
 

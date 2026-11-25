@@ -33,7 +33,6 @@ func Write(home string, r Record) {
 	if err != nil {
 		return
 	}
-	b = []byte(redact.Text(string(b)))
 	mu.Lock()
 	defer mu.Unlock()
 	os.MkdirAll(home, 0o700)

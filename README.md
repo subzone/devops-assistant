@@ -26,10 +26,34 @@ Optional CLI on your PATH:
 go install github.com/subzone/k8s-handler/cmd/k8sh@latest
 ```
 
+## TUI
+
+```bash
+k8sh tui            # or /k8s-handler:ui from Claude (opens a tmux/WezTerm/kitty pane or a Terminal window)
+```
+```
+ k8sh   1 Cluster  2 Argo CD  3 RCA  4 Lock                          k3d-mycluster [dev] LOCKED
+─────────────────────────────────────────────┬────────────────────────────────────────────────
+▸ ✔ default                                  │ Pod payments/api-1
+▾ ✔ payments                                 │ phase: Running
+  ▾ ⚠ deploy/api  1/2                        │ node: n1
+    ▸ ✖ pod/api-1  Running OOMKilled r:6     │ restarts: 6
+    ▸ ✔ pod/api-2  Running                   │
+──────────────────────────────────────────────────────────────────────────────────────────────
+ ⏎ expand  e events  l logs  f →Claude  u unlock  c ctx  r refresh  ? help  q quit
+```
+- Mouse: click to select, click again or click the arrow to expand; wheel scrolls; click tabs.
+- `f` sends the selection to Claude, then ask `/k8s-handler:explain`.
+- `u` issues a single-use grant for the selected pod/workload after you type the context name. It works only in your own terminal, never inside Claude.
+- Views: Cluster (namespaces → workloads → pods → containers), Argo CD (apps → resources), RCA (ranked findings + warnings), Lock (grants, tiers).
+- All output redacted. Native Windows: use WSL.
+
 ## Commands
 
 | Command | What it does |
 |---|---|
+| `/k8s-handler:ui` | open the TUI next to Claude |
+| `/k8s-handler:explain [question]` | explain/diagnose what you selected in the TUI (`f`) |
 | `/k8s-handler:status [context]` | contexts + tiers, lock state, Argo CD apps, top warnings |
 | `/k8s-handler:rca <ns> [context] [workload]` | read-only root-cause analysis |
 | `/k8s-handler:validate <path> [context]` | validation pipeline |
@@ -60,7 +84,7 @@ Tiers are labels: destructive actions stay locked on every tier.
 
 ## MCP tools
 
-Read: `k8s_contexts`, `k8s_get`, `k8s_describe`, `k8s_events`, `k8s_logs`, `argo_apps`, `argo_app_tree`, `rca_collect`, `validate_manifests`, `lock_status`
+Read: `k8s_contexts`, `k8s_get`, `k8s_describe`, `k8s_events`, `k8s_logs`, `argo_apps`, `argo_app_tree`, `rca_collect`, `validate_manifests`, `lock_status`, `tui_focus`
 Locked: `destructive_delete`, `destructive_scale_zero`
 
 Prometheus and Grafana: use their MCP servers alongside this one. See [docs/observability.md](docs/observability.md).
@@ -81,6 +105,8 @@ internal/redact      credential scrubbing
 internal/kube        kubectl wrapper, Argo CD, RCA
 internal/validate    validation pipeline
 internal/mcp         stdio MCP server + tools
+internal/tui         terminal UI (stdlib, ANSI, mouse)
+internal/focus       TUI → Claude selection bridge
 .claude-plugin/      plugin + marketplace manifests
 commands/ skills/ agents/ hooks/   Claude Code plugin
 docs/                RBAC, settings, observability

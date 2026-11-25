@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -53,5 +54,17 @@ func TestEnvValues(t *testing.T) {
 	}
 	if !strings.Contains(out, "debug") {
 		t.Fatal("non-sensitive env removed")
+	}
+}
+
+func TestJSONStaysValid(t *testing.T) {
+	in := `{"items":[{"message":"failed DB_PASSWORD=hunter2","count":12}]}`
+	out := JSON([]byte(in))
+	var v any
+	if err := json.Unmarshal(out, &v); err != nil {
+		t.Fatalf("redacted JSON invalid: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "hunter2") {
+		t.Fatal("leak")
 	}
 }

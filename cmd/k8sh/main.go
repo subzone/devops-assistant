@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -20,6 +22,7 @@ import (
 	"github.com/subzone/k8s-handler/internal/kube"
 	"github.com/subzone/k8s-handler/internal/mcp"
 	"github.com/subzone/k8s-handler/internal/settings"
+	"github.com/subzone/k8s-handler/internal/tui"
 	"github.com/subzone/k8s-handler/internal/validate"
 )
 
@@ -37,6 +40,8 @@ Usage:
   k8sh actions                     list actions that require a grant
   k8sh validate PATH [--strict] [--context C]
                                    run the validation pipeline (exit 1 on failure)
+  k8sh tui                         interactive UI (clickable trees: Cluster, Argo CD, RCA, Lock)
+  k8sh tui --open                  open the TUI in a new tmux/WezTerm/kitty pane or terminal window
   k8sh config show                 show context tiers and grant TTL ceiling
   k8sh config set-tier CONTEXT dev|staging|prod
   k8sh config set-ttl MINUTES      grant TTL ceiling (1-15)
@@ -95,6 +100,12 @@ func main() {
 		for _, k := range keys {
 			fmt.Printf("%-20s %s\n", k, grant.Actions[k])
 		}
+	case "tui":
+		if len(os.Args) > 2 && os.Args[2] == "--open" {
+			openTUI()
+			return
+		}
+		must(tui.Run(ctx, home, cfg))
 	case "config":
 		runConfig(cfg, os.Args[2:])
 	case "settings":
@@ -304,4 +315,41 @@ func must(err error) {
 func fail(msg string) {
 	fmt.Fprintln(os.Stderr, "k8sh:", msg)
 	os.Exit(1)
+}
+
+// openTUI launches "k8sh tui" in a separate pane/window the user controls.
+func openTUI() {
+	self, err := os.Executable()
+	must(err)
+	cmdline := shellQuote(self) + " tui"
+	try := func(name string, args ...string) bool {
+		if _, err := exec.LookPath(name); err != nil {
+			return false
+		}
+		c := exec.Command(name, args...)
+		if out, err := c.CombinedOutput(); err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v %s\n", name, err, strings.TrimSpace(string(out)))
+			return false
+		}
+		fmt.Println("opened k8sh TUI via", name)
+		return true
+	}
+	switch {
+	case os.Getenv("TMUX") != "" && try("tmux", "split-window", "-h", "-l", "60%", cmdline):
+	case os.Getenv("WEZTERM_PANE") != "" && try("wezterm", "cli", "split-pane", "--right", "--percent", "60", "--", self, "tui"):
+	case os.Getenv("KITTY_WINDOW_ID") != "" && try("kitty", "@", "launch", "--location=vsplit", self, "tui"):
+	case runtime.GOOS == "darwin" && os.Getenv("TERM_PROGRAM") == "iTerm.app" &&
+		try("osascript", "-e", `tell application "iTerm2" to create window with default profile command "`+cmdline+`"`):
+	case runtime.GOOS == "darwin" && try("osascript", "-e", `tell application "Terminal" to do script "`+cmdline+`"`, "-e", `tell application "Terminal" to activate`):
+	default:
+		fmt.Println("Could not open a pane automatically. Run this in a terminal next to Claude:")
+		fmt.Println("  " + cmdline)
+	}
+}
+
+func shellQuote(s string) string {
+	if !strings.ContainsAny(s, " '\"$`\\") {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

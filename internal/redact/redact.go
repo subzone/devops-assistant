@@ -83,7 +83,7 @@ func JSON(b []byte) []byte {
 	if err != nil {
 		return []byte(Text(string(b)))
 	}
-	return []byte(Text(string(out)))
+	return out
 }
 
 // Value scrubs an already-decoded JSON value.

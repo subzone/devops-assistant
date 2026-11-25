@@ -8,6 +8,7 @@ import (
 
 	"github.com/subzone/k8s-handler/internal/audit"
 	"github.com/subzone/k8s-handler/internal/config"
+	"github.com/subzone/k8s-handler/internal/focus"
 	"github.com/subzone/k8s-handler/internal/grant"
 	"github.com/subzone/k8s-handler/internal/kube"
 	"github.com/subzone/k8s-handler/internal/validate"
@@ -173,6 +174,16 @@ func Register(s *Server, d Deps) {
 				state = "LOCKED (with single-use grants)"
 			}
 			return map[string]any{"state": state, "grants": out}, nil
+		})
+
+	s.Add(Tool{Name: "tui_focus", Description: "Read what the user selected in the k8sh TUI (they pressed f): context, tier, view, kind, name, status and detail (events/logs if shown). Redacted.", Annotations: ro("TUI selection")},
+		func(ctx context.Context, a map[string]any) (any, error) {
+			f, err := focus.Read(d.Home)
+			if err != nil {
+				return nil, errors.New("nothing selected yet: in the TUI select an item and press f")
+			}
+			age := time.Since(f.Time).Round(time.Second)
+			return map[string]any{"focus": f, "age": age.String()}, nil
 		})
 
 	destructive := func(name, action, desc string, run func(context.Context, kube.Scope, string) (string, error)) {

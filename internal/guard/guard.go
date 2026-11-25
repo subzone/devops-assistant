@@ -64,6 +64,9 @@ var bashRules = []rule{
 	r(`\.k8sh/`, "the k8sh state directory (grants, audit log) is off-limits"),
 	r(b+`(script|expect|unbuffer|socat)\b`, "pseudo-terminal tools are blocked (lock bypass risk)"),
 	r(`\bpty\.spawn\b|\bpexpect\b|\bopenpty\b`, "pseudo-terminal spawning is blocked (lock bypass risk)"),
+	r(b+`tmux\b[^;&|]*\s(send-keys|send|paste-buffer|set-buffer|load-buffer|pipe-pane)\b`, "typing into terminal panes is blocked (lock bypass risk)"),
+	r(b+`(wezterm\s+cli\s+send-text|kitty\s+@\s*send-text|xdotool|ydotool|wtype)\b`, "synthetic keystrokes are blocked (lock bypass risk)"),
+	r(b+`osascript\b[^;&|]*(keystroke|key code|System Events|write text)`, "synthetic keystrokes are blocked (lock bypass risk)"),
 	r(`\bCLAUDECODE\b`, "tampering with the agent marker is blocked"),
 }
 

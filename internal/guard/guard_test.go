@@ -36,6 +36,10 @@ func TestBashDenied(t *testing.T) {
 		"terraform destroy",
 		"cat .env",
 		"cat ~/.k8sh/config.json",
+		"tmux send-keys -t 1 k3d-mycluster Enter",
+		"wezterm cli send-text k3d",
+		`osascript -e 'tell application "System Events" to keystroke "x"'`,
+		"xdotool type k3d",
 		"k8sh grant x",
 	}
 	for _, c := range denied {
@@ -64,6 +68,8 @@ func TestBashAllowed(t *testing.T) {
 		"k8sh status",
 		"/home/u/.claude/plugins/marketplaces/subzone/bin/k8sh-launch config set-tier k3d-mycluster dev",
 		"k8sh config show",
+		"k8sh tui --open",
+		"tmux split-window -h k8sh tui",
 		"k8sh settings apply --statusline 'k8sh statusline'",
 	}
 	for _, c := range allowed {
