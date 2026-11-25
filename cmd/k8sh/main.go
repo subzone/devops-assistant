@@ -26,7 +26,7 @@ import (
 	"github.com/subzone/k8s-handler/internal/validate"
 )
 
-var version = "0.2.1"
+var version = "0.2.2"
 
 const usage = `k8sh — GitOps-first Kubernetes operations with a destructive-action lock
 
@@ -338,9 +338,9 @@ func openTUI() {
 	case os.Getenv("TMUX") != "" && try("tmux", "split-window", "-h", "-l", "60%", cmdline):
 	case os.Getenv("WEZTERM_PANE") != "" && try("wezterm", "cli", "split-pane", "--right", "--percent", "60", "--", self, "tui"):
 	case os.Getenv("KITTY_WINDOW_ID") != "" && try("kitty", "@", "launch", "--location=vsplit", self, "tui"):
-	case runtime.GOOS == "darwin" && os.Getenv("TERM_PROGRAM") == "iTerm.app" &&
-		try("osascript", "-e", `tell application "iTerm2" to tell current session of current window to split vertically with default profile command "/bin/zsh -lc '`+strings.ReplaceAll(cmdline, `"`, `\"`)+`'"`):
+	case runtime.GOOS == "darwin" && isITerm() && splitITerm(cmdline):
 	default:
+		fmt.Printf("detected: os=%s TERM_PROGRAM=%q ITERM_SESSION_ID set=%v TMUX set=%v\n", runtime.GOOS, os.Getenv("TERM_PROGRAM"), os.Getenv("ITERM_SESSION_ID") != "", os.Getenv("TMUX") != "")
 		fmt.Println("This terminal can't be split from a script. To get the TUI as a right-side pane next to Claude:")
 		fmt.Println("  - iTerm2 / WezTerm / kitty: supported automatically")
 		fmt.Println("  - any terminal: start Claude inside tmux (tmux new -s k8s 'claude'), then /k8s-handler:ui")
@@ -354,4 +354,53 @@ func shellQuote(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func isITerm() bool {
+	return os.Getenv("TERM_PROGRAM") == "iTerm.app" || os.Getenv("ITERM_SESSION_ID") != "" || os.Getenv("LC_TERMINAL") == "iTerm2"
+}
+
+const itermScript = `on run argv
+	set sid to item 1 of argv
+	set cmd to item 2 of argv
+	tell application "iTerm2"
+		if sid is not "" then
+			repeat with w in windows
+				repeat with t in tabs of w
+					repeat with s in sessions of t
+						if (unique id of s) is sid then
+							tell s to split vertically with default profile command cmd
+							return "split next to Claude's session"
+						end if
+					end repeat
+				end repeat
+			end repeat
+		end if
+		tell current session of current window to split vertically with default profile command cmd
+		return "split current session"
+	end tell
+end run`
+
+// splitITerm opens the TUI as a pane to the right of the session Claude runs in.
+func splitITerm(cmdline string) bool {
+	sid := os.Getenv("ITERM_SESSION_ID")
+	if i := strings.IndexByte(sid, ':'); i >= 0 {
+		sid = sid[i+1:]
+	}
+	// keep the pane open on failure so the error is readable
+	inner := cmdline + ` || { echo; echo "k8sh tui exited with an error. Press Enter to close."; read _; }`
+	cmd := "/bin/zsh -lc " + shellQuote(inner)
+	c := exec.Command("osascript", "-", sid, cmd)
+	c.Stdin = strings.NewReader(itermScript)
+	out, err := c.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		fmt.Fprintln(os.Stderr, "iTerm2 split failed:", msg)
+		if strings.Contains(msg, "-1743") || strings.Contains(msg, "Not authorized") {
+			fmt.Fprintln(os.Stderr, "Allow it in System Settings → Privacy & Security → Automation → (your terminal / claude) → iTerm2, then retry.")
+		}
+		return false
+	}
+	fmt.Println("opened k8sh TUI on the right:", strings.TrimSpace(string(out)))
+	return true
 }
