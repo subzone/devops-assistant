@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "k8sh": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/k8sh-launch",
+      "args": ["mcp"],
+      "env": {
+        "K8SH_AGENT": "1"
+      }
+    }
+  }
+}

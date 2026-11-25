@@ -1,0 +1,13 @@
+{
+  "name": "k8s-handler",
+  "version": "0.1.0",
+  "description": "GitOps-first Kubernetes operations for Claude: Argo CD/Workflows, Helm, Kustomize, RCA, validation and security gates, with a hard lock on destructive actions and zero credential exposure.",
+  "author": {
+    "name": "Milenko",
+    "url": "https://github.com/subzone"
+  },
+  "homepage": "https://github.com/subzone/k8s-handler",
+  "repository": "https://github.com/subzone/k8s-handler",
+  "license": "MIT",
+  "keywords": ["kubernetes", "gitops", "argocd", "argo-workflows", "helm", "kustomize", "rca", "devsecops", "aks", "eks", "gke"]
+}

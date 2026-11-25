@@ -1,0 +1,8 @@
+/bin/k8sh
+/bin/k8sh-*
+!/bin/k8sh-launch
+/dist/
+*.test
+.env
+.env.*
+!.env.example

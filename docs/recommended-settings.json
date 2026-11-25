@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(~/.kube/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.azure/**)",
+      "Read(~/.config/gcloud/**)",
+      "Read(~/.docker/config.json)",
+      "Read(~/.ssh/**)",
+      "Read(~/.k8sh/**)",
+      "Edit(~/.k8sh/**)",
+      "Write(~/.k8sh/**)",
+      "Read(./**/.env)",
+      "Read(./**/.env.*)",
+      "Read(./**/*.pem)",
+      "Read(./**/*.key)",
+      "Bash(kubectl delete:*)",
+      "Bash(kubectl apply:*)",
+      "Bash(kubectl get secret:*)",
+      "Bash(helm uninstall:*)",
+      "Bash(helm upgrade:*)",
+      "Bash(helm install:*)",
+      "Bash(argocd app delete:*)",
+      "Bash(git push --force:*)",
+      "Bash(k8sh unlock:*)"
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "~/.claude/plugins/marketplaces/subzone/bin/k8sh-launch statusline"
+  }
+}

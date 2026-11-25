@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Locates or builds the k8sh binary, then execs it.
+# Order: plugin bin/k8sh-<os>-<arch>, plugin bin/k8sh, k8sh on PATH, build with Go.
+# If no binary can be found in hook mode, fail CLOSED for k8s-related commands.
+set -euo pipefail
+
+ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+ARCH="$(uname -m)"; case "$ARCH" in x86_64) ARCH=amd64;; aarch64|arm64) ARCH=arm64;; esac
+
+find_bin() {
+  for c in "$ROOT/bin/k8sh-$OS-$ARCH" "$ROOT/bin/k8sh"; do
+    [ -x "$c" ] && { echo "$c"; return 0; }
+  done
+  command -v k8sh 2>/dev/null && return 0
+  if command -v go >/dev/null 2>&1 && [ -f "$ROOT/go.mod" ]; then
+    (cd "$ROOT" && CGO_ENABLED=0 go build -trimpath -o "$ROOT/bin/k8sh" ./cmd/k8sh) >&2 && { echo "$ROOT/bin/k8sh"; return 0; }
+  fi
+  return 1
+}
+
+if BIN="$(find_bin)"; then
+  exec "$BIN" "$@"
+fi
+
+if [ "${1:-}" = "hook" ]; then
+  input="$(cat)"
+  if printf '%s' "$input" | grep -Eqi 'kubectl|helm|argocd|ansible|velero|eksctl|aws eks|az aks|gcloud container|terraform|\.kube|\.aws|\.azure|gcloud|secret|base64|\.k8sh|\.env'; then
+    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"k8sh guardrail: k8sh binary not installed, failing closed for Kubernetes/credential commands. Install Go 1.24+ or a k8sh release binary (see README)."}}'
+  fi
+  exit 0
+fi
+
+echo "k8sh: binary not found. Install Go 1.24+ (auto-build) or download a release into $ROOT/bin/ (see README)." >&2
+exit 1

@@ -1,0 +1,17 @@
+{
+  "description": "k8s-handler guardrails: block destructive commands, secret reads, credential files and lock bypass attempts.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/k8sh-launch hook pretooluse",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
