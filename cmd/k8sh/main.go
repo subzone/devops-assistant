@@ -26,7 +26,7 @@ import (
 	"github.com/subzone/k8s-handler/internal/validate"
 )
 
-var version = "0.2.0"
+var version = "0.2.1"
 
 const usage = `k8sh — GitOps-first Kubernetes operations with a destructive-action lock
 
@@ -339,10 +339,12 @@ func openTUI() {
 	case os.Getenv("WEZTERM_PANE") != "" && try("wezterm", "cli", "split-pane", "--right", "--percent", "60", "--", self, "tui"):
 	case os.Getenv("KITTY_WINDOW_ID") != "" && try("kitty", "@", "launch", "--location=vsplit", self, "tui"):
 	case runtime.GOOS == "darwin" && os.Getenv("TERM_PROGRAM") == "iTerm.app" &&
-		try("osascript", "-e", `tell application "iTerm2" to create window with default profile command "`+cmdline+`"`):
-	case runtime.GOOS == "darwin" && try("osascript", "-e", `tell application "Terminal" to do script "`+cmdline+`"`, "-e", `tell application "Terminal" to activate`):
+		try("osascript", "-e", `tell application "iTerm2" to tell current session of current window to split vertically with default profile command "/bin/zsh -lc '`+strings.ReplaceAll(cmdline, `"`, `\"`)+`'"`):
 	default:
-		fmt.Println("Could not open a pane automatically. Run this in a terminal next to Claude:")
+		fmt.Println("This terminal can't be split from a script. To get the TUI as a right-side pane next to Claude:")
+		fmt.Println("  - iTerm2 / WezTerm / kitty: supported automatically")
+		fmt.Println("  - any terminal: start Claude inside tmux (tmux new -s k8s 'claude'), then /k8s-handler:ui")
+		fmt.Println("Or run it yourself in a split pane:")
 		fmt.Println("  " + cmdline)
 	}
 }
