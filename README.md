@@ -28,9 +28,13 @@ go install github.com/subzone/k8s-handler/cmd/k8sh@latest
 
 ## TUI
 
+Claude chat on the left, k8s view on the right, in any terminal (Apple Terminal included):
 ```bash
-k8sh tui            # or /k8s-handler:ui from Claude (opens a tmux/WezTerm/kitty pane or a Terminal window)
+brew install tmux          # once
+k8sh workspace --continue  # tmux session "k8s": claude | k8sh tui  (args go to claude)
 ```
+Already in tmux, iTerm2, WezTerm or kitty? `/k8s-handler:ui` splits the current window. Standalone: `k8sh tui`.
+Inside the workspace: click a pane to switch; `tmux detach` (Ctrl-b d) keeps it running, `k8sh workspace` re-attaches.
 ```
  k8sh   1 Cluster  2 Argo CD  3 RCA  4 Lock                          k3d-mycluster [dev] LOCKED
 ─────────────────────────────────────────────┬────────────────────────────────────────────────

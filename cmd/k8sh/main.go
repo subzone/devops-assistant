@@ -26,7 +26,7 @@ import (
 	"github.com/subzone/k8s-handler/internal/validate"
 )
 
-var version = "0.2.2"
+var version = "0.2.3"
 
 const usage = `k8sh — GitOps-first Kubernetes operations with a destructive-action lock
 
@@ -42,6 +42,7 @@ Usage:
                                    run the validation pipeline (exit 1 on failure)
   k8sh tui                         interactive UI (clickable trees: Cluster, Argo CD, RCA, Lock)
   k8sh tui --open                  open the TUI in a new tmux/WezTerm/kitty pane or terminal window
+  k8sh workspace [claude args]     Claude chat on the left + k8s TUI on the right (tmux, any terminal)
   k8sh config show                 show context tiers and grant TTL ceiling
   k8sh config set-tier CONTEXT dev|staging|prod
   k8sh config set-ttl MINUTES      grant TTL ceiling (1-15)
@@ -106,6 +107,8 @@ func main() {
 			return
 		}
 		must(tui.Run(ctx, home, cfg))
+	case "workspace":
+		workspace(os.Args[2:])
 	case "config":
 		runConfig(cfg, os.Args[2:])
 	case "settings":
@@ -341,10 +344,10 @@ func openTUI() {
 	case runtime.GOOS == "darwin" && isITerm() && splitITerm(cmdline):
 	default:
 		fmt.Printf("detected: os=%s TERM_PROGRAM=%q ITERM_SESSION_ID set=%v TMUX set=%v\n", runtime.GOOS, os.Getenv("TERM_PROGRAM"), os.Getenv("ITERM_SESSION_ID") != "", os.Getenv("TMUX") != "")
-		fmt.Println("This terminal can't be split from a script. To get the TUI as a right-side pane next to Claude:")
-		fmt.Println("  - iTerm2 / WezTerm / kitty: supported automatically")
-		fmt.Println("  - any terminal: start Claude inside tmux (tmux new -s k8s 'claude'), then /k8s-handler:ui")
-		fmt.Println("Or run it yourself in a split pane:")
+		fmt.Println("This terminal can't be split from a script. For Claude on the left and the k8s view on the right,")
+		fmt.Println("quit Claude and run this in your terminal (needs tmux: brew install tmux):")
+		fmt.Println("  " + shellQuote(self) + " workspace --continue")
+		fmt.Println("Or run the TUI yourself in a split pane:")
 		fmt.Println("  " + cmdline)
 	}
 }
@@ -403,4 +406,50 @@ func splitITerm(cmdline string) bool {
 	}
 	fmt.Println("opened k8sh TUI on the right:", strings.TrimSpace(string(out)))
 	return true
+}
+
+// workspace starts (or re-attaches) a tmux session: Claude on the left,
+// the k8sh TUI on the right. Works in any terminal, incl. Apple Terminal.
+func workspace(claudeArgs []string) {
+	if os.Getenv("CLAUDECODE") != "" {
+		fail("run this in your own terminal, not inside Claude: k8sh workspace")
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		fail("tmux is required: brew install tmux (macOS) or apt install tmux")
+	}
+	if os.Getenv("TMUX") != "" {
+		fail("already inside tmux: run /k8s-handler:ui in Claude, or: tmux split-window -h -l 40% 'k8sh tui'")
+	}
+	self, err := os.Executable()
+	must(err)
+	const sess = "k8s"
+	if exec.Command("tmux", "has-session", "-t", sess).Run() == nil {
+		attach(sess)
+		return
+	}
+	claude := "claude"
+	for _, a := range claudeArgs {
+		claude += " " + shellQuote(a)
+	}
+	tuiCmd := shellQuote(self) + ` tui || { echo; echo "k8sh tui exited. Press Enter to close."; read _; }`
+	steps := [][]string{
+		{"new-session", "-d", "-s", sess, "-n", "k8s", "-x", "240", "-y", "60", claude},
+		{"set-option", "-t", sess, "mouse", "on"},
+		{"split-window", "-h", "-l", "42%", "-t", sess + ":k8s", tuiCmd},
+		{"select-pane", "-t", sess + ":k8s.0"},
+	}
+	for _, st := range steps {
+		if out, err := exec.Command("tmux", st...).CombinedOutput(); err != nil {
+			fail(fmt.Sprintf("tmux %s: %v %s", st[0], err, strings.TrimSpace(string(out))))
+		}
+	}
+	attach(sess)
+}
+
+func attach(sess string) {
+	c := exec.Command("tmux", "attach-session", "-t", sess)
+	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := c.Run(); err != nil {
+		fail(err.Error())
+	}
 }
