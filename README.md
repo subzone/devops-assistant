@@ -34,7 +34,7 @@ brew install tmux          # once
 k8sh workspace --continue  # tmux session "k8s": claude | k8sh tui  (args go to claude)
 ```
 Already in tmux, iTerm2, WezTerm or kitty? `/k8s-handler:ui` splits the current window. Standalone: `k8sh tui`.
-Inside the workspace: click a pane to switch; `tmux detach` (Ctrl-b d) keeps it running, `k8sh workspace` re-attaches.
+Looks like a plain window: no status bar, mouse on, thin divider, its own tmux server and config (yours is untouched). Click or Alt+←/→ to switch panes. Quitting Claude closes the workspace; Ctrl-b d detaches and `k8sh workspace` re-attaches.
 ```
  k8sh   1 Cluster  2 Argo CD  3 RCA  4 Lock                          k3d-mycluster [dev] LOCKED
 ─────────────────────────────────────────────┬────────────────────────────────────────────────

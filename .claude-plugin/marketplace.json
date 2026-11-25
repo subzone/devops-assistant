@@ -9,7 +9,7 @@
       "name": "k8s-handler",
       "source": "./",
       "description": "GitOps-first Kubernetes operations with a destructive-action lock, secret redaction, validation and RCA.",
-      "version": "0.2.3"
+      "version": "0.2.4"
     }
   ]
 }

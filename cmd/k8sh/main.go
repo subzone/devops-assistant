@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -26,7 +27,7 @@ import (
 	"github.com/subzone/k8s-handler/internal/validate"
 )
 
-var version = "0.2.3"
+var version = "0.2.4"
 
 const usage = `k8sh — GitOps-first Kubernetes operations with a destructive-action lock
 
@@ -423,8 +424,15 @@ func workspace(claudeArgs []string) {
 	self, err := os.Executable()
 	must(err)
 	const sess = "k8s"
-	if exec.Command("tmux", "has-session", "-t", sess).Run() == nil {
-		attach(sess)
+	// private tmux server + config: invisible chrome, doesn't touch the user's tmux setup
+	home, _ := config.EnsureHome()
+	conf := filepath.Join(home, "workspace.tmux.conf")
+	os.WriteFile(conf, []byte(workspaceTmuxConf), 0o600)
+	tm := func(args ...string) *exec.Cmd {
+		return exec.Command("tmux", append([]string{"-L", "k8sh", "-f", conf}, args...)...)
+	}
+	if tm("has-session", "-t", sess).Run() == nil {
+		attach(tm("attach-session", "-t", sess))
 		return
 	}
 	claude := "claude"
@@ -434,20 +442,35 @@ func workspace(claudeArgs []string) {
 	tuiCmd := shellQuote(self) + ` tui || { echo; echo "k8sh tui exited. Press Enter to close."; read _; }`
 	steps := [][]string{
 		{"new-session", "-d", "-s", sess, "-n", "k8s", "-x", "240", "-y", "60", claude},
-		{"set-option", "-t", sess, "mouse", "on"},
 		{"split-window", "-h", "-l", "42%", "-t", sess + ":k8s", tuiCmd},
 		{"select-pane", "-t", sess + ":k8s.0"},
 	}
 	for _, st := range steps {
-		if out, err := exec.Command("tmux", st...).CombinedOutput(); err != nil {
+		if out, err := tm(st...).CombinedOutput(); err != nil {
 			fail(fmt.Sprintf("tmux %s: %v %s", st[0], err, strings.TrimSpace(string(out))))
 		}
 	}
-	attach(sess)
+	attach(tm("attach-session", "-t", sess))
 }
 
-func attach(sess string) {
-	c := exec.Command("tmux", "attach-session", "-t", sess)
+// No status bar, mouse on, thin divider, session ends when Claude exits.
+const workspaceTmuxConf = `set -g status off
+set -g mouse on
+set -g escape-time 0
+set -g focus-events on
+set -g default-terminal "tmux-256color"
+set -as terminal-features ",*:RGB"
+set -g pane-border-lines single
+set -g pane-border-style "fg=colour238"
+set -g pane-active-border-style "fg=colour238"
+set -g remain-on-exit off
+set -g detach-on-destroy on
+set-hook -g pane-exited "if -F '#{==:#{pane_index},0}' 'kill-session'"
+bind -n M-Left select-pane -L
+bind -n M-Right select-pane -R
+`
+
+func attach(c *exec.Cmd) {
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := c.Run(); err != nil {
 		fail(err.Error())
