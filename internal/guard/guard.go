@@ -55,6 +55,23 @@ var bashRules = []rule{
 	r(b+`aws\s+eks\s+(delete|update-cluster-version|update-nodegroup-version)`, "EKS delete/upgrade requires a user grant via k8sh"),
 	r(b+`az\s+aks\s+(delete|upgrade|nodepool\s+(delete|upgrade)|stop)\b`, "AKS delete/upgrade requires a user grant via k8sh"),
 	r(b+`gcloud\s+container\s+(clusters|node-pools)\s+(delete|upgrade)\b`, "GKE delete/upgrade requires a user grant via k8sh"),
+	r(b+`(terraform|tofu|terragrunt)\b[^;&|]*\s(destroy|apply|import|taint|untaint|force-unlock|state\s+(rm|mv|push|replace-provider)|workspace\s+delete)\b`, "infrastructure changes are applied by GitOps reconciliation after a PR (plan/validate are fine)"),
+	r(b+`pulumi\b[^;&|]*\s(up|destroy|import|refresh|state\s+delete|stack\s+rm)\b`, "infrastructure changes are applied by GitOps reconciliation after a PR"),
+	r(b+`crossplane\b[^;&|]*\s(xpkg\s+push)\b`, "publishing packages is blocked from the agent"),
+	// --- cloud CLIs: read (list/describe/get/show/logs/costs) only ---
+	r(b+`aws\s+[a-z0-9-]+\s+(delete|terminate|remove|deregister|detach|disassociate|revoke|stop|reboot|put|update|modify|create|run|start|attach|associate|authorize|restore|reset|cancel|disable|enable|replace|import|copy|register|release|allocate|send|publish|invoke)-`, "cloud changes go through Terraform/Crossplane in Git (read-only aws calls are fine)"),
+	r(b+`aws\s+s3\s+(rm|rb|mv|sync|cp)\b`, "S3 writes/deletes go through Git-managed infrastructure"),
+	r(b+`aws\s+[^;&|]*(configure\s+(get|export-credentials)|sts\s+get-session-token|ecr\s+get-login-password|eks\s+get-token)`, "printing cloud credentials/tokens is blocked"),
+	r(b+`az\s+[^;&|]*\s(delete|create|update|stop|restart|deallocate|purge|start|remove|add|import|deploy|upgrade|scale|swap|assign|regenerate|reset|renew|revoke)\b`, "cloud changes go through Terraform/Crossplane in Git (read-only az calls are fine)"),
+	r(b+`az\s+rest\b[^;&|]*--method\s+(put|post|patch|delete)`, "cloud changes go through Terraform/Crossplane in Git"),
+	r(b+`az\s+[^;&|]*(get-access-token|keys\s+list|list-keys|credential\s+list|show-connection-string|keyvault\s+secret\s+show)`, "printing cloud credentials/keys is blocked"),
+	r(b+`gcloud\s+[^;&|]*\s(delete|create|update|deploy|stop|reset|resize|patch|set-iam-policy|add-iam-policy-binding|remove-iam-policy-binding|import|restore|undelete|suspend|resume|start)\b`, "cloud changes go through Terraform/Crossplane in Git (read-only gcloud calls are fine)"),
+	r(b+`gcloud\s+[^;&|]*(print-access-token|print-identity-token|application-default\s+print|secrets\s+versions\s+access|keys\s+create)`, "printing cloud credentials/tokens is blocked"),
+	r(b+`hcloud\s+[a-z-]+\s+(delete|create|update|poweroff|poweron|shutdown|reset|reboot|rebuild|detach|attach|change-type|change-protection|enable-protection|disable-protection|enable-rescue|reset-password|add-\S+|remove-\S+|set-\S+|assign|unassign|resize)\b`, "cloud changes go through Terraform/Crossplane in Git (read-only hcloud calls are fine)"),
+	r(b+`doctl\s+[^;&|]*\s(delete|create|update|power-off|power-on|power-cycle|shutdown|reboot|resize|rebuild|restore|destroy|attach|detach|assign|unassign|add|remove|tag|untag)\b`, "cloud changes go through Terraform/Crossplane in Git (read-only doctl calls are fine)"),
+	r(b+`doctl\s+auth\b`, "doctl auth handles tokens; run it yourself"),
+	r(`(?-i:`+b+`aliyun\s+[a-z0-9-]+\s+(Delete|Release|Stop|Create|Modify|Remove|Update|Reboot|Unbind|Detach|Attach|Allocate|Reset|Replace|Revoke|Authorize|Run|Start|Put|Set)[A-Za-z]*)`, "cloud changes go through Terraform/Crossplane in Git (read-only aliyun Describe*/List*/Get* calls are fine)"),
+	r(`\$\{?(AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|ARM_CLIENT_SECRET|AZURE_CLIENT_SECRET|ARM_ACCESS_KEY|GOOGLE_CREDENTIALS|HCLOUD_TOKEN|DIGITALOCEAN_(ACCESS_)?TOKEN|ALICLOUD_SECRET_KEY|ALICLOUD_ACCESS_KEY|ALIBABA_CLOUD_ACCESS_KEY_SECRET|INFRACOST_API_KEY|GRAFANA_\w*TOKEN|GITHUB_TOKEN|GH_TOKEN|TF_TOKEN_\w+|VAULT_TOKEN)\b`, "reading credential environment variables is blocked"),
 	r(b+`terraform\b[^;&|]*\s(destroy|apply)\b`, "terraform apply/destroy blocked from the agent"),
 	// --- git history ---
 	r(b+`git\b[^;&|]*\spush\b[^;&|]*(\s-f\b|--force|--mirror|--delete|\s:\S)`, "force-push / remote deletion blocked"),
@@ -74,6 +91,8 @@ var bashRules = []rule{
 var credPaths = []string{
 	".kube/", ".kube\\", ".aws/", ".azure/", ".config/gcloud", ".docker/config.json",
 	".ssh/", ".gnupg/", ".netrc", ".git-credentials", ".vault-token", ".k8sh/",
+	".config/hcloud", ".config/doctl", ".aliyun/", ".terraform.d/credentials", ".terraformrc", ".pulumi/credentials",
+	".infracost/", ".oci/", "application_default_credentials.json",
 }
 
 var credFileRe = regexp.MustCompile(`(?i)(^|/)(\.env(\.[a-z0-9_-]+)?|kubeconfig[^/]*|credentials(\.json)?|.*\.(pem|key|p12|pfx|jks|kdbx))$`)

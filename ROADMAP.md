@@ -1,5 +1,7 @@
 # Roadmap
 
+**v0.3:** multi-cloud infra skills (design, Terraform/OpenTofu, Crossplane, cloud ops), Terraform/Crossplane validation, cloud CLI guard.
+
 **v0.1:** TUI (Cluster, Argo CD, RCA, Lock views; mouse; focus bridge; in-TUI unlock), local config commands, lock/grants, redaction, guardrail hook, audit log, read-only MCP tools (k8s, Argo CD, RCA), validation pipeline, plugin commands, skills, agents.
 
 | Milestone | Scope |

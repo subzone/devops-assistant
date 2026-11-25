@@ -71,3 +71,51 @@ func TestTokenKeyFails(t *testing.T) {
 		t.Fatal("token in configmap passed")
 	}
 }
+
+func TestTerraformCredentialFails(t *testing.T) {
+	d := t.TempDir()
+	os.WriteFile(filepath.Join(d, "main.tf"), []byte(`provider "hcloud" {
+  token = "abcdef1234567890abcdef"
+}
+resource "hcloud_server" "a" { name = "a" }
+`), 0o600)
+	r, err := Run(context.Background(), d, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Passed {
+		t.Fatalf("hard-coded hcloud token passed: %+v", r.Stages)
+	}
+}
+
+func TestTerraformCleanPassesBuiltin(t *testing.T) {
+	d := t.TempDir()
+	os.WriteFile(filepath.Join(d, "main.tf"), []byte(`terraform {
+  required_providers {
+    hcloud = { source = "hetznercloud/hcloud", version = "~> 1.49" }
+  }
+  backend "s3" {}
+}
+provider "hcloud" {}
+`), 0o600)
+	r, _ := Run(context.Background(), d, Options{})
+	for _, s := range r.Stages {
+		if s.Name == "secrets (builtin)" && s.Status != Pass {
+			t.Fatalf("clean module failed secrets: %s", s.Output)
+		}
+	}
+}
+
+func TestCrossplaneOrphanWarning(t *testing.T) {
+	p := write(t, "apiVersion: s3.aws.upbound.io/v1beta1\nkind: Bucket\nmetadata:\n  name: data\nspec:\n  forProvider:\n    region: eu-central-1\n  providerConfigRef:\n    name: default\n")
+	r, _ := Run(context.Background(), p, Options{})
+	found := false
+	for _, s := range r.Stages {
+		if s.Name == "crossplane hygiene (builtin)" && s.Status == Fail {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("missing deletionPolicy warning")
+	}
+}

@@ -26,6 +26,16 @@ Optional CLI on your PATH:
 go install github.com/subzone/k8s-handler/cmd/k8sh@latest
 ```
 
+## Multi-cloud infrastructure
+
+AWS, Azure, GCP, Hetzner, DigitalOcean, Alibaba Cloud:
+- Design: landing zone, network plan (CIDRs, tiers, egress, private endpoints), diagrams as code, Well-Architected review (`infra-design` skill)
+- Code: Crossplane (AWS/Azure/GCP providers; `provider-terraform` for Hetzner/Alibaba) or Terraform/OpenTofu with remote state and keyless auth
+- Reconciliation: Argo CD syncs Crossplane objects (incl. Terraform `Workspace`s), or an Argo Workflows plan → approve → apply pipeline
+- Validation: `validate_manifests` detects Terraform (secrets, fmt, validate, tflint, trivy, checkov, infracost) and Crossplane (`crossplane beta validate`, `deletionPolicy` checks)
+- Ops: read-only logs, inventory and costs through each cloud's CLI (`cloud-ops` skill)
+- Guard: cloud CLIs are read-only for Claude; `terraform/tofu apply|destroy|import|state …`, `pulumi up`, mutating `aws/az/gcloud/hcloud/doctl/aliyun` calls and token-printing commands are blocked; cloud credential files are unreadable
+
 ## TUI
 
 Claude chat on the left, k8s view on the right, in any terminal (Apple Terminal included):
@@ -65,6 +75,9 @@ Looks like a plain window: no status bar, mouse on, thin divider, its own tmux s
 | `/k8s-handler:deploy <change>` | GitOps change: branch → edit → validate → diff → PR |
 | `/k8s-handler:unlock …` | prints the `k8sh unlock` command for you to run (user-only) |
 | `/k8s-handler:lock` | revoke all grants |
+| `/k8s-handler:infra-design <system>` | design + network diagrams (Mermaid/D2) + validated Terraform/Crossplane, WAF review |
+| `/k8s-handler:infra-costs [clouds]` | cost totals, trends, drivers, waste (read-only) |
+| `/k8s-handler:infra-logs …` | cloud/cluster log search (read-only) |
 | `/k8s-handler:setup` | tiers, status line, observability MCP, RBAC |
 
 ## Unlocking a destructive action

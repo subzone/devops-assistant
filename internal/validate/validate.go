@@ -203,6 +203,9 @@ func Run(ctx context.Context, path string, o Options) (*Report, error) {
 		return nil, err
 	}
 	defer os.RemoveAll(tmp)
+	if IsTerraform(path) {
+		return RunTerraform(ctx, path, o)
+	}
 	rep := &Report{Path: path}
 	file, st, err := Render(ctx, path, tmp)
 	rep.Stages = append(rep.Stages, st)
@@ -220,6 +223,7 @@ func Run(ctx context.Context, path string, o Options) (*Report, error) {
 		tool(ctx, "security (trivy)", false, "trivy", "config", "--quiet", "--exit-code", "1", "--severity", "HIGH,CRITICAL", file),
 		builtinHygiene(text),
 	)
+	rep.Stages = append(rep.Stages, crossplaneStages(ctx, text, file)...)
 	// kyverno requires a policy dir; skip if none
 	for i := range rep.Stages {
 		if rep.Stages[i].Name == "policy (kyverno)" && policyDir(path) == "" {

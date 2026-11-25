@@ -143,7 +143,7 @@ func Register(s *Server, d Deps) {
 			return d.Kube.RCA(ctx, sc)
 		})
 
-	s.Add(Tool{Name: "validate_manifests", Description: "Run the validation pipeline on a file or directory (kustomize/helm/plain): render, secret scan, schema, lint, policy, security, and optional server-side dry-run. Must pass before proposing a PR.",
+	s.Add(Tool{Name: "validate_manifests", Description: "Run the validation pipeline on a file or directory. Kubernetes (kustomize/helm/plain, incl. Crossplane): render, secret scan, schema, lint, policy, security, crossplane validate, optional server dry-run. Terraform/OpenTofu dirs: secret scan, fmt, init -backend=false + validate, tflint, trivy, checkov, infracost estimate. Must pass before proposing a PR.",
 		InputSchema: Obj(map[string]any{"path": Str("file or directory"), "context": Str("if set, also run kubectl apply --dry-run=server against this context"),
 			"strict": Bool("fail when scanners are missing (default false; CI should use true)")}, "path"),
 		Annotations: ro("Validate manifests")},
