@@ -918,6 +918,9 @@ let piperVoiceSetting = 'en_US-ryan-medium'
 let micSetting = 'default'
 let whisperSetting = '~/.local/share/whisper-models/ggml-base.en.bin'
 let hearingSends = false
+// Off by default: an answer goes to a second model only when the person
+// turned this on in /config, and the pane says so while it is on.
+let readsAnswers = false
 /** what was found at session start (empty: not there) */
 const tools = { home: '', tmp: '/tmp', piper: '', piperModel: '', ffmpeg: '', whisper: '', whisperModel: '' }
 /** afplay playing Piper's line: ending its stream stops it @type {ReturnType<Engine['process']['spawn']> | null} */
@@ -1640,6 +1643,8 @@ async function draw($, e) {
       v.busy > 0 ? h(Text, { dimColor: true }, 'loading…') : null,
       Raster ? h(Button, { key: 'look', label: LOOK_LABEL[look], plain: true, dimColor: look === 'off', onPress: () => cycleLook($) }) : null,
       Raster && look === 'steve' ? h(Button, { key: 'voice', label: v.voice ? '♪ voice on' : '♪ voice off', plain: true, dimColor: !v.voice, onPress: () => toggleVoice($) }) : null,
+      // said while it happens: every finished answer, redacted, goes to haiku
+      Raster && look === 'steve' && readsAnswers ? h(Text, { color: 'warning' }, '👁 reads answers (haiku)') : null,
       e.surface === 'terminal'
         ? h(Button, {
             key: 'talk',
@@ -1886,6 +1891,7 @@ export function register(on, options) {
   if (typeof options?.steveMicrophone === 'string' && options.steveMicrophone) micSetting = options.steveMicrophone
   if (typeof options?.steveWhisperModel === 'string' && options.steveWhisperModel) whisperSetting = options.steveWhisperModel
   if (typeof options?.steveHearingSends === 'boolean') hearingSends = options.steveHearingSends
+  readsAnswers = options?.steveReadsAnswers === true
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -1964,7 +1970,8 @@ export function register(on, options) {
         steve.thinking = false
         if (e.isAborted) await say($, steveLine('stopped', salty), { aloud: false })
         else if (e.answer && fxLook === 'steve') {
-          const said = await react($, e.answer)
+          // his own take (haiku) only when the person opted in; else a canned line
+          const said = readsAnswers ? await react($, e.answer) : steveLine('done', salty)
           if (said) await say($, said)
         }
       }

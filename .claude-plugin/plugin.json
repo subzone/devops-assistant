@@ -1,6 +1,6 @@
 {
   "name": "devops-assistant",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "types": "./types/index.d.ts",
   "description": "GitOps-first Kubernetes operations for Claude: Argo CD/Workflows, Helm, Kustomize, RCA, validation and security gates, with a hard lock on destructive actions and zero credential exposure.",
   "author": {
@@ -47,6 +47,12 @@
       "type": "boolean",
       "title": "Send what Steve hears",
       "description": "Off: what you say goes into the prompt box for you to check and send. On: it is sent at once.",
+      "default": false
+    },
+    "steveReadsAnswers": {
+      "type": "boolean",
+      "title": "Steve reads Claude's answers",
+      "description": "Off (default): Steve reacts with his own canned lines, and no answer goes anywhere. On: each finished answer, redacted, goes to a small haiku call so he can react to it in his own words (one extra model call per answer, counted in /cost); the pane shows it while on.",
       "default": false
     },
     "steveSwearing": {

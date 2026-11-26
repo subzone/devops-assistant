@@ -565,8 +565,21 @@ test('the backdrop: Steve by default, then ∞, then off, from the look button; 
   await desk.unmount()
 })
 
-test('grumpy Steve: listens, names the tool, reacts to the answer in his own words, speaks with voice on, swears at a new problem', async ($, on) => {
+test('Steve reads no answers unless asked: canned lines, no model call, no marker', async ($, on) => {
   const { w, clock, ui } = await openPane($, on)
+  expect(await ui.find({ type: 'Text', text: /reads answers/ })).toBeUndefined()
+  await $.turn.complete({ turnId: 't1', answer: 'The api-2 pod is OOMKilled. Raise its memory limit.', durationMs: 5, isAborted: false, reason: 'answered' } as never)
+  await clock.advance(83 * 2)
+  expect(w.asked).toEqual([])
+  expect(linesFor('done', true).some(l => shown(w).includes(l))).toBe(true)
+  expect(shown(w)).not.toContain('OOMKilled')
+  await ui.unmount()
+})
+
+test('grumpy Steve (reading answers, opted in): listens, names the tool, reacts to the answer in his own words, speaks with voice on, swears at a new problem', { options: { steveReadsAnswers: true } }, async ($, on) => {
+  const { w, clock, ui } = await openPane($, on)
+  // while he reads answers, the pane says so
+  expect(await ui.find({ type: 'Text', text: /reads answers \(haiku\)/ })).toBeDefined()
   // a grumpy greeting, not said aloud
   await clock.advance(83 * 2)
   expect(linesFor('greet', true).some(l => shown(w).includes(l))).toBe(true)
