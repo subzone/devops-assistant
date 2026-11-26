@@ -47,6 +47,12 @@ type App struct {
 	listTop  int
 	tabStart int
 	crumbs   []crumb
+	keys     <-chan []byte
+	menu     *menu
+	quit     bool
+	buttons  []button
+	ctxX0    int
+	ctxX1    int
 }
 
 func Run(ctx context.Context, home string, cfg *config.Config) error {
@@ -88,6 +94,7 @@ func Run(ctx context.Context, home string, cfg *config.Config) error {
 			keys <- b
 		}
 	}()
+	a.keys = keys
 	a.rows, a.cols = termSize()
 	a.reload()
 	for {
@@ -101,7 +108,7 @@ func Run(ctx context.Context, home string, cfg *config.Config) error {
 			if !ok {
 				return nil
 			}
-			if quit := a.handle(b, keys); quit {
+			if quit := a.handle(b, keys); quit || a.quit {
 				return nil
 			}
 		}
@@ -248,6 +255,10 @@ func (a *App) move(d int) {
 }
 
 func (a *App) handle(b []byte, keys <-chan []byte) bool {
+	a.msg = ""
+	if a.menu != nil {
+		return a.menuInput(string(b))
+	}
 	s := string(b)
 	for len(s) > 0 {
 		switch {
@@ -332,7 +343,17 @@ func (a *App) handle(b []byte, keys <-chan []byte) bool {
 				a.dscroll = 0
 			}
 		case '\r', '\n', ' ':
-			a.toggle(a.current())
+			if n := a.current(); n != nil && !n.expandable() && c != ' ' {
+				a.openActions(0, 0)
+			} else {
+				a.toggle(n)
+			}
+		case 'm':
+			a.openActions(0, 0)
+		case 'C':
+			a.openContexts()
+		case 'd':
+			a.describe()
 		case 'l':
 			a.logs()
 		case '\t':
@@ -350,7 +371,7 @@ func (a *App) handle(b []byte, keys <-chan []byte) bool {
 		case 'f':
 			a.sendFocus()
 		case 'u':
-			a.unlock(keys)
+			a.unlock(keys, "")
 		case '?':
 			a.extra = helpLines
 			a.dscroll = 0
@@ -456,8 +477,35 @@ func (a *App) mouse(params string, press bool) {
 	case 65:
 		a.move(3)
 		return
-	case 0:
+	case 0, 2:
 	default:
+		return
+	}
+	if y == a.rows { // footer buttons
+		for _, bt := range a.buttons {
+			if x >= bt.x0 && x < bt.x1 {
+				bt.act()
+				return
+			}
+		}
+		return
+	}
+	if y == 1 && x <= 8 {
+		a.mainMenu()
+		return
+	}
+	if y == 1 && x >= a.ctxX0 && x < a.ctxX1 {
+		a.openContexts()
+		return
+	}
+	if btn == 2 { // right-click: select row, open actions there
+		row := y - a.listTop
+		idx := a.off[a.tab] + row
+		if v := a.visible(); row >= 0 && idx < len(v) && x <= a.leftWidth() {
+			a.sel[a.tab] = idx
+			a.extra, a.dscroll = nil, 0
+			a.openActions(x, y)
+		}
 		return
 	}
 	if y == 1 { // tab bar click
@@ -553,6 +601,7 @@ func (a *App) events() {
 		lines = append(lines, "(none)")
 	}
 	a.extra, a.dscroll = lines, 0
+	a.msg = ""
 }
 
 func (a *App) logs() {
@@ -572,6 +621,7 @@ func (a *App) logs() {
 	}
 	a.extra = append([]string{"Logs " + pod + " " + c + " (last 200, redacted)"}, strings.Split(strings.TrimRight(out, "\n"), "\n")...)
 	a.dscroll = len(a.extra) // jump to bottom
+	a.msg = ""
 }
 
 func (a *App) detailLines() []string {
@@ -603,7 +653,7 @@ func (a *App) sendFocus() {
 }
 
 // unlock issues a grant for the selected object from inside the TUI.
-func (a *App) unlock(keys <-chan []byte) {
+func (a *App) unlock(keys <-chan []byte, preset string) {
 	n := a.current()
 	if n == nil {
 		return
@@ -622,7 +672,9 @@ func (a *App) unlock(keys <-chan []byte) {
 		return
 	}
 	action := actions[0]
-	if len(actions) > 1 {
+	if preset != "" {
+		action = preset
+	} else if len(actions) > 1 {
 		a.msg = "unlock: d = delete, z = scale to 0, any other key = cancel"
 		a.draw()
 		b, ok := <-keys
@@ -689,6 +741,9 @@ var helpLines = []string{
 	"f              send selection to Claude (/k8s-handler:explain)",
 	"u              unlock ONE destructive action for selection",
 	"c              next context  r         refresh",
+	"m / right-click action menu for the selection (enter on a leaf too)",
+	"d              describe      C / click context   switch context",
+	"footer buttons are clickable",
 	"q              quit",
 	"",
 	"Secrets and tokens are redacted in every view.",

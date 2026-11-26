@@ -96,7 +96,7 @@ func (a *App) draw() {
 	if gs, _ := grant.NewStore(a.home).List(); len(gs) > 0 {
 		lock = yellow + fmt.Sprintf("UNLOCKED x%d", len(gs)) + reset
 	}
-	title := " k8sh "
+	title := " ≡ k8sh "
 	o.WriteString(inverse + bold + title + reset + " ")
 	used := utf8.RuneCountInString(title) + 1
 	a.tabStart = used + 1
@@ -109,11 +109,13 @@ func (a *App) draw() {
 		}
 		used += utf8.RuneCountInString(lbl) + 1
 	}
-	right := fmt.Sprintf(" %s [%s] %s ", a.kctx, tier, "LOCK")
+	right := fmt.Sprintf(" %s ▾ [%s] %s ", a.kctx, tier, "LOCKED")
 	pad := cols - used - utf8.RuneCountInString(right)
 	if pad > 0 {
 		o.WriteString(strings.Repeat(" ", pad))
-		o.WriteString(" " + a.kctx + " [" + tc + string(tier) + reset + "] " + lock + "\x1b[K")
+		a.ctxX0 = used + pad + 2
+		a.ctxX1 = a.ctxX0 + utf8.RuneCountInString(a.kctx) + 4 + utf8.RuneCountInString(string(tier))
+		o.WriteString(" " + "\x1b[4m" + a.kctx + " ▾" + reset + " [" + tc + string(tier) + reset + "] " + lock + "\x1b[K")
 	} else {
 		o.WriteString("\x1b[K")
 	}
@@ -214,12 +216,45 @@ func (a *App) draw() {
 	// footer
 	m := a.msg
 	o.WriteString(dim + strings.Repeat("─", cols) + reset + "\x1b[K\r\n")
-	keys := "⏎ expand  esc back  0 top  e events  l logs  f →Claude  u unlock  c ctx  r refresh  ? help  q quit"
 	if m != "" {
 		o.WriteString(yellow + fit(" "+m, cols) + reset)
 	} else {
-		o.WriteString(dim + fit(" "+keys, cols) + reset)
+		a.drawButtons()
 	}
 	o.WriteString("\x1b[K\x1b[J")
+	a.drawMenu()
 	o.Flush()
+}
+
+// drawButtons renders the clickable footer button bar.
+func (a *App) drawButtons() {
+	a.buttons = a.buttons[:0]
+	type b struct {
+		label string
+		act   func()
+	}
+	n := a.current()
+	bs := []b{{"≡ Menu", a.mainMenu}, {"⋯ Actions", func() { a.openActions(0, 0) }}}
+	if n != nil && (n.kind == "Pod" || n.kind == "Container") {
+		bs = append(bs, b{"Logs", a.logs})
+	}
+	if n != nil && n.name != "" && n.kind != "Info" {
+		bs = append(bs, b{"Events", a.events}, b{"→ Claude", a.sendFocus})
+	}
+	if a.extra != nil || (n != nil && (n.expanded || n.parent != nil)) {
+		bs = append(bs, b{"← Back", a.back})
+	}
+	bs = append(bs, b{"⌂ Top", func() { a.top(true) }}, b{"⟳ Refresh", a.reload}, b{"? Help", func() { a.extra, a.dscroll = helpLines, 0 }}, b{"✕ Quit", func() { a.quit = true }})
+	col := 1
+	o := a.out
+	for _, bt := range bs {
+		lbl := " " + bt.label + " "
+		w := utf8.RuneCountInString(lbl)
+		if col+w+1 > a.cols {
+			break
+		}
+		o.WriteString(inverse + lbl + reset + " ")
+		a.buttons = append(a.buttons, button{x0: col, x1: col + w, act: bt.act})
+		col += w + 1
+	}
 }

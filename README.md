@@ -56,6 +56,7 @@ Looks like a plain window: no status bar, mouse on, thin divider, its own tmux s
 ──────────────────────────────────────────────────────────────────────────────────────────────
  ⏎ expand  e events  l logs  f →Claude  u unlock  c ctx  r refresh  ? help  q quit
 ```
+- Clickable menus: `≡ k8sh` main menu, context dropdown (click the context name), action menu on any item (right-click, `m`, or Enter on a leaf: logs, previous logs, events, describe, send to Claude, unlock delete / scale to 0), and a button bar in the footer.
 - Mouse: click to select, click again or click the arrow to expand; wheel scrolls; click tabs.
 - Back: `esc`/`backspace` closes logs/events, collapses, then goes up a level; `0` collapses all and jumps to the top; the breadcrumb (`⌂ Cluster › payments › api › api-1`) is clickable; clicking the active tab also collapses all.
 - `f` sends the selection to Claude, then ask `/k8s-handler:explain`.
