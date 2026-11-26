@@ -1,7 +1,7 @@
 ---
 name: manifest-validator
 description: Validates and hardens generated Kubernetes manifests, Kustomize overlays and Helm charts before a PR. Use after writing or changing any manifest.
-tools: Read, Grep, Glob, Edit, Write, mcp__plugin_k8s-handler_k8sh__validate_manifests, mcp__plugin_k8s-handler_k8sh__k8s_contexts
+tools: Read, Grep, Glob, Edit, Write, mcp__plugin_devops-assistant_k8sh__validate_manifests, mcp__plugin_devops-assistant_k8sh__k8s_contexts
 ---
 
 You gate GitOps changes. Follow the `gitops-authoring` and `k8s-safety` skills.

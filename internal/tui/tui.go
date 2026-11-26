@@ -12,11 +12,11 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/subzone/k8s-handler/internal/audit"
-	"github.com/subzone/k8s-handler/internal/config"
-	"github.com/subzone/k8s-handler/internal/focus"
-	"github.com/subzone/k8s-handler/internal/grant"
-	"github.com/subzone/k8s-handler/internal/kube"
+	"github.com/subzone/devops-assistant/internal/audit"
+	"github.com/subzone/devops-assistant/internal/config"
+	"github.com/subzone/devops-assistant/internal/focus"
+	"github.com/subzone/devops-assistant/internal/grant"
+	"github.com/subzone/devops-assistant/internal/kube"
 )
 
 type crumb struct {
@@ -649,7 +649,7 @@ func (a *App) sendFocus() {
 		a.msg = "error: " + err.Error()
 		return
 	}
-	a.msg = "sent to Claude — ask: /k8s-handler:explain"
+	a.msg = "sent to Claude — ask: /devops-assistant:explain"
 }
 
 // unlock issues a grant for the selected object from inside the TUI.
@@ -738,7 +738,7 @@ var helpLines = []string{
 	"tab 1-4        switch view   wheel     scroll",
 	"J/K            scroll detail PgUp/PgDn page",
 	"e              events        l         logs (pod/container)",
-	"f              send selection to Claude (/k8s-handler:explain)",
+	"f              send selection to Claude (/devops-assistant:explain)",
 	"u              unlock ONE destructive action for selection",
 	"c              next context  r         refresh",
 	"m / right-click action menu for the selection (enter on a leaf too)",

@@ -5,7 +5,7 @@ import type { On } from 'claude-code'
 // the pane reaches: panes, the status line, processes, files, the prompt.
 
 const PANE = {
-  plugin: 'k8s-handler',
+  plugin: 'devops-assistant',
   component: 'Pane',
   requestId: 'k8s',
   props: {
@@ -86,7 +86,7 @@ function world(on: On): World {
     return { text: e.text }
   })
   on('tool.call', () => ({ result: {} }))
-  on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:k8s-handler:k8sh' } }))
+  on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:devops-assistant:k8sh' } }))
   on('mcp.call', (_, e) => {
     w.calls.push(e)
     const text = (v: unknown) => ({ value: { content: [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v) }], isError: false } })
@@ -156,7 +156,7 @@ function world(on: On): World {
     }
     return { value: { exitCode: 1, stdout: '', stderr: 'unexpected', isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  on('fs.read', () => ({ value: 'f'.repeat(64) + '\n' }))
+  on('fs.read', (_, e) => ({ value: String(e.path).endsWith('/.claude-plugin/plugin.json') ? '{"name":"devops-assistant","version":"9.8.7"}' : 'f'.repeat(64) + '\n' }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   return w
 }
@@ -397,7 +397,7 @@ test('a deployment offers delete or scale-zero', async ($, on) => {
 test('a k8sh tool call refreshes the open pane; /k8s again closes it', async ($, on) => {
   const { w, clock, ui } = await openPane($, on)
   const before = tool(w, 'k8s_get').length
-  await $.tool.call({ tool: 'mcp__plugin_k8s-handler_k8sh__k8s_get', kind: 'pods' } as never)
+  await $.tool.call({ tool: 'mcp__plugin_devops-assistant_k8sh__k8s_get', kind: 'pods' } as never)
   await clock.advance(1600)
   expect(tool(w, 'k8s_get').length).toBeGreaterThan(before)
 
@@ -413,11 +413,11 @@ test('a k8sh tool call refreshes the open pane; /k8s again closes it', async ($,
   await ui.unmount()
 })
 
-test('/k8s-handler:ui opens the same pane', async ($, on) => {
+test('/devops-assistant:ui opens the same pane', async ($, on) => {
   const w = world(on)
   mock.clock(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  const out = await $.command.run({ command: 'k8s-handler:ui' })
+  const out = await $.command.run({ command: 'devops-assistant:ui' })
   expect(out.text).toContain('k8s pane open')
   expect(w.closed).toBe(0)
 })
@@ -428,6 +428,11 @@ test('the ∞ backdrop turns behind the docked terminal pane; the ∞ button tur
   expect(raster?.props).toMatchObject({ columns: 70, rows: 60 })
   // 70 x 60 cells of three u32 each, base64
   expect(String(raster?.props.cells).length).toBe(Math.ceil((70 * 60 * 12) / 3) * 4)
+  // the name and version from plugin.json, under the ∞
+  const bin = atob(String(raster?.props.cells))
+  let glyphs = ''
+  for (let i = 0; i < bin.length; i += 12) glyphs += String.fromCharCode(bin.charCodeAt(i) | (bin.charCodeAt(i + 1) << 8))
+  expect(glyphs).toContain('devops-assistant v9.8.7')
 
   await clock.advance(83 * 4)
   expect(w.blits.length).toBeGreaterThanOrEqual(3)

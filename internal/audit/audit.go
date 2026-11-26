@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/subzone/k8s-handler/internal/redact"
+	"github.com/subzone/devops-assistant/internal/redact"
 )
 
 type Record struct {

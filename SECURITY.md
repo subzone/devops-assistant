@@ -1,6 +1,6 @@
 # Security model
 
-k8s-handler has two rules that no setting turns off:
+devops-assistant has two rules that no setting turns off:
 
 1. **No destructive action without an explicit user command at that moment.**
 2. **No credentials in Git, and none exposed to the model, logs or UI.**
@@ -23,7 +23,7 @@ Grants and the HMAC key are stored in `~/.k8sh` and owned by your OS user. The h
 The k8s pane's unlock has the same same-user limit. `k8sh grant-from-ui` can't tell the pane apart from any other process of your user that holds the UI token: the token, the guard rules and the absence of any agent route to the pane's Button and Input are what keep Claude out. A command that slips past the guard's patterns (a renamed copy of the binary, say, together with an obfuscated read of `~/.k8sh/ui.token`) could issue a grant. Rotation after each grant limits how long a token that leaked stays useful. The separate-user daemon on the roadmap closes this gap too.
 
 ### Differences from the design plan
-- `/k8s-handler:unlock` only **prints** the command. You run `k8sh unlock` yourself in a separate terminal. Chat input can't be trusted as a confirmation channel.
+- `/devops-assistant:unlock` only **prints** the command. You run `k8sh unlock` yourself in a separate terminal. Chat input can't be trusted as a confirmation channel.
 - Claude Desktop elicitation-based confirmation is on the roadmap.
 
 ### Local configuration is not locked

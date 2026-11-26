@@ -5,8 +5,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/subzone/k8s-handler/internal/config"
-	"github.com/subzone/k8s-handler/internal/grant"
+	"github.com/subzone/devops-assistant/internal/config"
+	"github.com/subzone/devops-assistant/internal/grant"
 )
 
 const (

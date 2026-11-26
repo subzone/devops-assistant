@@ -75,7 +75,7 @@ export type K8sData = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'k8s-handler': {
+    'devops-assistant': {
       view: Shaped<K8sView>
       data: Shaped<K8sData>
     }

@@ -1,9 +1,9 @@
 ---
-description: Set up k8s-handler — context tiers, Claude settings (deny-list + status line), observability, RBAC
+description: Set up devops-assistant — context tiers, Claude settings (deny-list + status line), observability, RBAC
 allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/bin/k8sh-launch version), Bash(${CLAUDE_PLUGIN_ROOT}/bin/k8sh-launch config:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/k8sh-launch settings:*)
 ---
 
-Configure k8s-handler for the user. Do the work yourself with the commands below. Ask before writing, and don't hand the user snippets to paste.
+Configure devops-assistant for the user. Do the work yourself with the commands below. Ask before writing, and don't hand the user snippets to paste.
 
 `K="${CLAUDE_PLUGIN_ROOT}/bin/k8sh-launch"`
 
@@ -19,4 +19,4 @@ Configure k8s-handler for the user. Do the work yourself with the commands below
    - Use the stable marketplace path for the status line (`~/.claude/plugins/marketplaces/subzone/bin/k8sh-launch statusline`), not the versioned cache path.
 4. **Observability** (optional): if they want Grafana, show the `claude mcp add grafana …` command from `docs/observability.md`. The token stays in their shell or keychain, so they run that command themselves.
 5. **Cluster RBAC:** if any context is staging or prod, recommend `docs/rbac/agent-readonly.yaml` for the identity Claude uses there. Local dev clusters can stay as they are.
-6. Finish by running `/k8s-handler:status`.
+6. Finish by running `/devops-assistant:status`.

@@ -1,4 +1,4 @@
-// Package settings merges k8s-handler recommendations into a Claude Code
+// Package settings merges devops-assistant recommendations into a Claude Code
 // settings.json. It only ever ADDS deny rules and a status line; it never
 // removes or loosens anything, and it keeps a .bak of the original.
 package settings

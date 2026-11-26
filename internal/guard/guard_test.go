@@ -28,7 +28,7 @@ func TestBashDenied(t *testing.T) {
 		"bin/k8sh-launch unlock dev delete x",
 		"k8sh grant-from-ui --context k3d-mycluster --action delete --target pod/x --confirm k3d-mycluster",
 		"bin/k8sh-launch grant-from-ui --context dev --action delete --target pod/x --confirm dev < t",
-		"/opt/k8s-handler/bin/k8sh-darwin-arm64 grant-from-ui --context dev --confirm dev",
+		"/opt/devops-assistant/bin/k8sh-darwin-arm64 grant-from-ui --context dev --confirm dev",
 		"echo tok | k8sh grant-from-ui --context dev --action delete --target pod/x --confirm dev",
 		"cat \"$K8SH_HOME/ui.token\"",
 		"cp ui.token /tmp/x",

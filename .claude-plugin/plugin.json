@@ -1,14 +1,14 @@
 {
-  "name": "k8s-handler",
-  "version": "0.4.1",
+  "name": "devops-assistant",
+  "version": "0.5.0",
   "types": "./types/index.d.ts",
   "description": "GitOps-first Kubernetes operations for Claude: Argo CD/Workflows, Helm, Kustomize, RCA, validation and security gates, with a hard lock on destructive actions and zero credential exposure.",
   "author": {
     "name": "Milenko",
     "url": "https://github.com/subzone"
   },
-  "homepage": "https://github.com/subzone/k8s-handler",
-  "repository": "https://github.com/subzone/k8s-handler",
+  "homepage": "https://github.com/subzone/devops-assistant",
+  "repository": "https://github.com/subzone/devops-assistant",
   "license": "MIT",
   "keywords": ["terraform", "opentofu", "crossplane", "aws", "azure", "gcp", "hetzner", "digitalocean", "alibaba", "finops", "kubernetes", "gitops", "argocd", "argo-workflows", "helm", "kustomize", "rca", "devsecops", "aks", "eks", "gke"]
 }

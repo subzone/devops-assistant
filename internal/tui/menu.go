@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/subzone/k8s-handler/internal/kube"
+	"github.com/subzone/devops-assistant/internal/kube"
 )
 
 type menuItem struct {
@@ -71,7 +71,7 @@ func (a *App) openActions(x, y int) {
 		it = append(it, menuItem{label: "Send to Claude", key: "f", act: a.sendFocus})
 		it = append(it, menuItem{label: "Ask Claude: what's wrong?", act: func() {
 			a.sendFocus()
-			a.msg = "selection sent — in Claude run: /k8s-handler:explain what's wrong?"
+			a.msg = "selection sent — in Claude run: /devops-assistant:explain what's wrong?"
 		}})
 	}
 	switch n.kind {

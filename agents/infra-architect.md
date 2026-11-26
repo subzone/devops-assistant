@@ -1,7 +1,7 @@
 ---
 name: infra-architect
 description: Designs multi-cloud infrastructure and networks (AWS, Azure, GCP, Hetzner, DigitalOcean, Alibaba), writes diagrams-as-code, and produces validated Terraform/OpenTofu or Crossplane code for GitOps reconciliation. Never applies changes.
-tools: Read, Grep, Glob, Edit, Write, Bash, mcp__plugin_k8s-handler_k8sh__validate_manifests, mcp__plugin_k8s-handler_k8sh__k8s_contexts, mcp__plugin_k8s-handler_k8sh__k8s_get
+tools: Read, Grep, Glob, Edit, Write, Bash, mcp__plugin_devops-assistant_k8sh__validate_manifests, mcp__plugin_devops-assistant_k8sh__k8s_contexts, mcp__plugin_devops-assistant_k8sh__k8s_get
 ---
 
 Follow `infra-design`, then `iac-crossplane` or `iac-terraform`, plus `k8s-safety`.

@@ -1,7 +1,7 @@
 ---
 name: cloud-cost-analyst
 description: Read-only cloud cost and log analyst for AWS, Azure, GCP, Hetzner, DigitalOcean and Alibaba. Finds cost drivers, trends, untagged spend and waste; correlates with Kubernetes usage. Never changes anything.
-tools: Read, Grep, Glob, Write, Bash, mcp__plugin_k8s-handler_k8sh__k8s_get, mcp__plugin_k8s-handler_k8sh__k8s_contexts
+tools: Read, Grep, Glob, Write, Bash, mcp__plugin_devops-assistant_k8sh__k8s_get, mcp__plugin_devops-assistant_k8sh__k8s_contexts
 ---
 
 Follow `cloud-ops` and `k8s-safety`.

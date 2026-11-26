@@ -1,4 +1,4 @@
-// k8sh — GitOps-first Kubernetes operations core for the k8s-handler Claude plugin.
+// k8sh — GitOps-first Kubernetes operations core for the devops-assistant Claude plugin.
 package main
 
 import (
@@ -16,18 +16,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/subzone/k8s-handler/internal/audit"
-	"github.com/subzone/k8s-handler/internal/config"
-	"github.com/subzone/k8s-handler/internal/grant"
-	"github.com/subzone/k8s-handler/internal/guard"
-	"github.com/subzone/k8s-handler/internal/kube"
-	"github.com/subzone/k8s-handler/internal/mcp"
-	"github.com/subzone/k8s-handler/internal/settings"
-	"github.com/subzone/k8s-handler/internal/tui"
-	"github.com/subzone/k8s-handler/internal/validate"
+	"github.com/subzone/devops-assistant/internal/audit"
+	"github.com/subzone/devops-assistant/internal/config"
+	"github.com/subzone/devops-assistant/internal/grant"
+	"github.com/subzone/devops-assistant/internal/guard"
+	"github.com/subzone/devops-assistant/internal/kube"
+	"github.com/subzone/devops-assistant/internal/mcp"
+	"github.com/subzone/devops-assistant/internal/settings"
+	"github.com/subzone/devops-assistant/internal/tui"
+	"github.com/subzone/devops-assistant/internal/validate"
 )
 
-var version = "0.4.1"
+var version = "0.5.0"
 
 const usage = `k8sh — GitOps-first Kubernetes operations with a destructive-action lock
 
@@ -478,7 +478,7 @@ func workspace(claudeArgs []string) {
 		fail("tmux is required: brew install tmux (macOS) or apt install tmux")
 	}
 	if os.Getenv("TMUX") != "" {
-		fail("already inside tmux: run /k8s-handler:ui in Claude, or: tmux split-window -h -l 40% 'k8sh tui'")
+		fail("already inside tmux: run /devops-assistant:ui in Claude, or: tmux split-window -h -l 40% 'k8sh tui'")
 	}
 	self, err := os.Executable()
 	must(err)

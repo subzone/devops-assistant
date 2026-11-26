@@ -1,3 +1,3 @@
-module github.com/subzone/k8s-handler
+module github.com/subzone/devops-assistant
 
 go 1.24

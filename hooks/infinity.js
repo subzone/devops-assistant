@@ -2,7 +2,8 @@
 // The k8s pane's backdrop: a rotating 3D infinity, the DevOps loop.
 //
 // A wireframe tube around a lemniscate, its two strands crossing at different
-// depths, turned about the vertical axis and tilted towards the viewer. Each
+// depths, swaying left and right about the vertical axis (never edge-on, so
+// it always reads as ∞) and tilted towards the viewer. Each
 // frame is drawn into braille dots (2x4 per cell, so the dots are nearly
 // square) with a depth buffer, so strands and the tube's far side hide behind
 // what is nearer. Shaded from deep navy to ice blue by light and depth, with
@@ -12,11 +13,13 @@
 // [codePoint, foreground, background] u32 triplets, little-endian).
 
 const DEFAULT_COLOR = 0x01000000
+const LABEL_COLOR = 0x3f8fd8
 const TAU = Math.PI * 2
 
-/** Frames per full turn and per lap of a pulse, at FRAME_MS. */
+/** Frames per sway (left, right and back) and per lap of a pulse, at FRAME_MS. */
 export const FRAME_MS = 83
-const TURN_FRAMES = 132
+const SWAY_FRAMES = 120
+const SWAY = 0.52
 const PULSE_FRAMES = 96
 
 // Braille dot bits by [x][y] within a 2x4 cell.
@@ -64,6 +67,7 @@ const LINES = 6
  *   line: Float32Array, nLine: number,
  *   rings: number, ringSteps: number,
  *   zbuf: Float32Array, lum: Float32Array, words: DataView, bytes: Uint8Array,
+ *   labelRow: number,
  * }} Geometry
  */
 
@@ -178,8 +182,27 @@ function geometry(cols, rows) {
     lum: new Float32Array(W * H),
     words: new DataView(new ArrayBuffer(cols * rows * 12)),
     bytes: new Uint8Array(0),
+    labelRow: 0,
   }
   g.bytes = new Uint8Array(g.words.buffer)
+
+  // The label's row: under the lowest dot the sway ever reaches, so it holds still.
+  let bottom = 0
+  const ca = Math.cos(TILT)
+  const sa = Math.sin(TILT)
+  for (const th of [-SWAY, -SWAY / 2, 0, SWAY / 2, SWAY]) {
+    const ct = Math.cos(th)
+    const st = Math.sin(th)
+    for (let i = 0, o = 0; i < g.nSurf; i++, o += 7) {
+      const x = surf[o]
+      const y = surf[o + 1]
+      const z = surf[o + 2]
+      const z2 = -ca * st * x + sa * y + ca * ct * z
+      const py = H / 2 + (sa * st * x + ca * y - sa * ct * z) * (D / (D + z2))
+      if (py > bottom) bottom = py
+    }
+  }
+  g.labelRow = Math.min(rows - 1, Math.floor(bottom / 4) + 1)
   if (cache.size > 6) cache.clear()
   cache.set(id, g)
   return g
@@ -188,14 +211,15 @@ function geometry(cols, rows) {
 /**
  * The cells of one frame for a Raster of cols x rows.
  * @param {number} cols @param {number} rows @param {number} frame
+ * @param {string} [label] centred under the ∞ (printable ASCII; cut to fit)
  * @returns {string}
  */
-export function infinityCells(cols, rows, frame) {
+export function infinityCells(cols, rows, frame, label) {
   const g = geometry(cols, rows)
   const { W, H, a, r, D, zbuf, lum, words } = g
 
-  // Turn about y, then tilt about x.
-  const th = (frame / TURN_FRAMES) * TAU
+  // Sway about y, then tilt about x.
+  const th = SWAY * Math.sin((frame / SWAY_FRAMES) * TAU)
   const ct = Math.cos(th)
   const st = Math.sin(th)
   const ca = Math.cos(TILT)
@@ -300,6 +324,18 @@ export function infinityCells(cols, rows, frame) {
       }
       words.setUint32(w + 8, DEFAULT_COLOR, true)
       w += 12
+    }
+  }
+
+  // The label, centred under the ∞, in a steady mid blue.
+  const text = (label ?? '').replace(/[^\x20-\x7e]/g, '').slice(0, cols)
+  if (text) {
+    const x0 = Math.floor((cols - text.length) / 2)
+    for (let i = 0; i < text.length; i++) {
+      const o = (g.labelRow * cols + x0 + i) * 12
+      words.setUint32(o, text.charCodeAt(i), true)
+      words.setUint32(o + 4, LABEL_COLOR, true)
+      words.setUint32(o + 8, DEFAULT_COLOR, true)
     }
   }
   return base64(g.bytes)

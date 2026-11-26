@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/subzone/k8s-handler/internal/kube"
+	"github.com/subzone/devops-assistant/internal/kube"
 )
 
 // Status classes drive the icon/colour.

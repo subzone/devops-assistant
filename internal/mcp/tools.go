@@ -6,12 +6,12 @@ import (
 	"errors"
 	"time"
 
-	"github.com/subzone/k8s-handler/internal/audit"
-	"github.com/subzone/k8s-handler/internal/config"
-	"github.com/subzone/k8s-handler/internal/focus"
-	"github.com/subzone/k8s-handler/internal/grant"
-	"github.com/subzone/k8s-handler/internal/kube"
-	"github.com/subzone/k8s-handler/internal/validate"
+	"github.com/subzone/devops-assistant/internal/audit"
+	"github.com/subzone/devops-assistant/internal/config"
+	"github.com/subzone/devops-assistant/internal/focus"
+	"github.com/subzone/devops-assistant/internal/grant"
+	"github.com/subzone/devops-assistant/internal/kube"
+	"github.com/subzone/devops-assistant/internal/validate"
 )
 
 type Deps struct {

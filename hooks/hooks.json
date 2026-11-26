@@ -1,5 +1,5 @@
 {
-  "description": "k8s-handler guardrails: block destructive commands, secret reads, credential files and lock bypass attempts. The k8s side pane mod (/k8s) is the hooks module.",
+  "description": "devops-assistant guardrails: block destructive commands, secret reads, credential files and lock bypass attempts. The k8s side pane mod (/k8s) is the hooks module.",
   "modules": ["./k8s-pane.js"],
   "hooks": {
     "PreToolUse": [

@@ -1,4 +1,4 @@
-# k8s-handler
+# devops-assistant
 
 GitOps-first Kubernetes operations for Claude Code, with a **hard lock on destructive actions** and **zero credential exposure**.
 
@@ -16,14 +16,22 @@ See [SECURITY.md](SECURITY.md) for the full model.
 Requires `kubectl`, plus Go 1.24+ (the plugin builds `k8sh` on first use) or a release binary.
 
 ```
-/plugin marketplace add subzone/k8s-handler
-/plugin install k8s-handler@subzone
-/k8s-handler:setup
+/plugin marketplace add subzone/devops-assistant
+/plugin install devops-assistant@subzone
+/devops-assistant:setup
 ```
+
+Coming from `k8s-handler` (renamed in 0.5.0)? Auto-update can't follow a name change, so reinstall once:
+```
+/plugin uninstall k8s-handler@subzone
+/plugin marketplace update subzone
+/plugin install devops-assistant@subzone
+```
+Your `~/.k8sh` config, tiers, grants and audit log stay as they are. If you ran `/k8s-handler:setup`, run `/devops-assistant:setup` again so the deny-list rules and status line use the new tool names.
 
 Optional CLI on your PATH:
 ```bash
-go install github.com/subzone/k8s-handler/cmd/k8sh@latest
+go install github.com/subzone/devops-assistant/cmd/k8sh@latest
 ```
 
 ## Multi-cloud infrastructure
@@ -38,7 +46,7 @@ AWS, Azure, GCP, Hetzner, DigitalOcean, Alibaba Cloud:
 
 ## k8s pane
 
-Type `/k8s` and the cluster view opens on the right side of the chat, inside the same Claude Code session. You don't need tmux, a second window or a separate process. It works in any terminal, Apple Terminal included, and in the Code tab of the Claude desktop app. `/k8s` again (or Esc while the pane has focus) closes it. `/k8s-handler:ui` opens the same pane.
+Type `/k8s` and the cluster view opens on the right side of the chat, inside the same Claude Code session. You don't need tmux, a second window or a separate process. It works in any terminal, Apple Terminal included, and in the Code tab of the Claude desktop app. `/k8s` again (or Esc while the pane has focus) closes it. `/devops-assistant:ui` opens the same pane.
 ```
  1: Cluster  2: Argo CD  3: RCA  4: Lock               │  ...chat...
  context k3d-mycluster [dev] ▾   LOCKED                │
@@ -59,7 +67,7 @@ Type `/k8s` and the cluster view opens on the right side of the chat, inside the
 - The status line shows `k8s <context> [<tier>] LOCKED` (or `UNLOCKED xN`). The pane refreshes on open, on ⟳, on tab or context change, every 15 s while open, and after Claude uses a k8sh tool.
 - **Unlock…** on a pod or workload asks you to type the context name, then issues one grant: delete for pods and daemonsets, delete or scale to 0 for deployments and statefulsets. It is single use, for that exact target, expires within 15 minutes and is audited. Only you can press it: Claude has no tool, command or prompt that reaches it.
 - Everything shown comes from the k8sh MCP tools, so it is redacted. The pane never reads kubeconfig. Switching the pane's context doesn't change kubectl's current context.
-- In the docked terminal pane, a rotating 3D ∞ (the DevOps loop) turns in the background, in blues, with pulses flowing round it. It shows only in empty cells, so it never covers text. The `∞` button in the tab row turns it off or on.
+- In the docked terminal pane, a 3D ∞ (the DevOps loop) sways in the background, in blues, with pulses flowing round it and the plugin's version under it. It shows only in empty cells, so it never covers text. The `∞` button in the tab row turns it off or on.
 - The right-side dock needs Claude Code's fullscreen layout and a wide enough terminal. Otherwise the pane opens above the prompt, which is normal Claude Code behaviour.
 
 The older standalone TUI (`k8sh tui`, `k8sh workspace`) is still there as a fallback for a Claude Code that doesn't load mods.
@@ -69,18 +77,18 @@ The older standalone TUI (`k8sh tui`, `k8sh workspace`) is still there as a fall
 | Command | What it does |
 |---|---|
 | `/k8s` | open or close the k8s pane beside the chat |
-| `/k8s-handler:ui` | open the k8s pane (same as `/k8s`) |
-| `/k8s-handler:explain [question]` | explain/diagnose what you sent from the standalone TUI (`f`); in the pane use Ask Claude |
-| `/k8s-handler:status [context]` | contexts + tiers, lock state, Argo CD apps, top warnings |
-| `/k8s-handler:rca <ns> [context] [workload]` | read-only root-cause analysis |
-| `/k8s-handler:validate <path> [context]` | validation pipeline |
-| `/k8s-handler:deploy <change>` | GitOps change: branch → edit → validate → diff → PR |
-| `/k8s-handler:unlock …` | prints the `k8sh unlock` command for you to run (user-only) |
-| `/k8s-handler:lock` | revoke all grants |
-| `/k8s-handler:infra-design <system>` | design + network diagrams (Mermaid/D2) + validated Terraform/Crossplane, WAF review |
-| `/k8s-handler:infra-costs [clouds]` | cost totals, trends, drivers, waste (read-only) |
-| `/k8s-handler:infra-logs …` | cloud/cluster log search (read-only) |
-| `/k8s-handler:setup` | tiers, status line, observability MCP, RBAC |
+| `/devops-assistant:ui` | open the k8s pane (same as `/k8s`) |
+| `/devops-assistant:explain [question]` | explain/diagnose what you sent from the standalone TUI (`f`); in the pane use Ask Claude |
+| `/devops-assistant:status [context]` | contexts + tiers, lock state, Argo CD apps, top warnings |
+| `/devops-assistant:rca <ns> [context] [workload]` | read-only root-cause analysis |
+| `/devops-assistant:validate <path> [context]` | validation pipeline |
+| `/devops-assistant:deploy <change>` | GitOps change: branch → edit → validate → diff → PR |
+| `/devops-assistant:unlock …` | prints the `k8sh unlock` command for you to run (user-only) |
+| `/devops-assistant:lock` | revoke all grants |
+| `/devops-assistant:infra-design <system>` | design + network diagrams (Mermaid/D2) + validated Terraform/Crossplane, WAF review |
+| `/devops-assistant:infra-costs [clouds]` | cost totals, trends, drivers, waste (read-only) |
+| `/devops-assistant:infra-logs …` | cloud/cluster log search (read-only) |
+| `/devops-assistant:setup` | tiers, status line, observability MCP, RBAC |
 
 ## Unlocking a destructive action
 
@@ -94,7 +102,7 @@ Claude can then call `destructive_delete` exactly once for that target. `k8sh ac
 
 ## Configuration
 
-`/k8s-handler:setup` configures everything. Or by hand:
+`/devops-assistant:setup` configures everything. Or by hand:
 ```bash
 k8sh config set-tier k3d-mycluster dev      # contexts not listed count as prod
 k8sh config set-ttl 10                      # grant TTL ceiling, 1-15 min

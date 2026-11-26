@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/subzone/k8s-handler/internal/redact"
+	"github.com/subzone/devops-assistant/internal/redact"
 )
 
 // Exec runs a binary and returns stdout. Replaceable in tests.

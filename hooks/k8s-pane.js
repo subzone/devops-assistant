@@ -21,7 +21,7 @@ import { FRAME_MS, infinityCells } from './infinity.js'
 /** @typedef {import('../types').K8sStatus} K8sStatus */
 
 const PANE = 'k8s'
-const TOOL_PREFIX = 'mcp__plugin_k8s-handler_k8sh__'
+const TOOL_PREFIX = 'mcp__plugin_devops-assistant_k8sh__'
 const PAGE = 30
 const REFRESH_MS = 15000
 const DETAIL_MAX_LINES = 300
@@ -52,8 +52,8 @@ const INITIAL_VIEW = {
 /** @type {K8sData} */
 const INITIAL_DATA = { contexts: [], grants: [], nodes: {}, children: {}, errors: {}, loadedFor: null }
 
-const view = atom({ plugin: 'k8s-handler', key: 'view' }, INITIAL_VIEW, { shape: 'view-1' })
-const data = atom({ plugin: 'k8s-handler', key: 'data' }, INITIAL_DATA, { shape: 'data-1' })
+const view = atom({ plugin: 'devops-assistant', key: 'view' }, INITIAL_VIEW, { shape: 'view-1' })
+const data = atom({ plugin: 'devops-assistant', key: 'data' }, INITIAL_DATA, { shape: 'data-1' })
 
 // Module state: timers and caches only; a reload starts them over.
 /** @type {{ cancel: () => void } | null} */
@@ -75,6 +75,18 @@ let fxFrame = 0
 let fxSize = null
 let fxMiss = 0
 let fxBusy = false
+// Under the ∞: the plugin's name and version, from its own plugin.json.
+let fxLabel = 'devops-assistant'
+
+/** @param {Engine} $ */
+async function loadLabel($) {
+  try {
+    const { version } = JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`))
+    if (typeof version === 'string' && version) fxLabel = `devops-assistant v${version}`
+  } catch {
+    // keep the name alone
+  }
+}
 
 // ---------- small helpers ----------
 
@@ -138,7 +150,7 @@ function mk(tab, parent, seg, fields) {
 async function server($) {
   if (serverName) return serverName
   const r = await $.mcp.connect('k8sh')
-  if (!r.isConnected) throw new Error(`k8sh MCP server not connected: ${r.message} (check /mcp for plugin:k8s-handler:k8sh)`)
+  if (!r.isConnected) throw new Error(`k8sh MCP server not connected: ${r.message} (check /mcp for plugin:devops-assistant:k8sh)`)
   serverName = r.server
   return serverName
 }
@@ -649,7 +661,7 @@ async function fxTick($) {
   if (fxMiss > 2 && fxFrame % 12 !== 0) return
   fxBusy = true
   try {
-    const r = await $.ui.blit({ requestId: PANE, key: FX_KEY, columns: size.cols, rows: size.rows, cells: infinityCells(size.cols, size.rows, fxFrame) })
+    const r = await $.ui.blit({ requestId: PANE, key: FX_KEY, columns: size.cols, rows: size.rows, cells: infinityCells(size.cols, size.rows, fxFrame, fxLabel) })
     fxMiss = r && 'deny' in r && r.deny ? fxMiss + 1 : 0
   } catch {
     fxMiss += 1
@@ -843,7 +855,7 @@ async function askClaude($) {
   const ctx = v.context ?? '(none)'
   const n = v.selected ? d.nodes[v.selected] : undefined
   const lines = [
-    'From the k8s pane: please diagnose this, read-only, following the k8s-handler rca-runbook skill.',
+    'From the k8s pane: please diagnose this, read-only, following the devops-assistant rca-runbook skill.',
     `context: ${ctx} [${tierOf(d, v.context)}] (lock: ${lockText(d, v.context)})`,
   ]
   if (n) {
@@ -1196,7 +1208,7 @@ async function draw($, e) {
     const fxRows = Math.min(256, Math.max(1, e.props.scroll?.bodyRows ?? 40))
     fxSize = { cols: fxCols, rows: fxRows }
     fxMiss = 0
-    backdrop = h(Box, { position: 'absolute', top: 0, left: 0 }, h(Raster, { key: FX_KEY, columns: fxCols, rows: fxRows, cells: infinityCells(fxCols, fxRows, fxFrame) }))
+    backdrop = h(Box, { position: 'absolute', top: 0, left: 0 }, h(Raster, { key: FX_KEY, columns: fxCols, rows: fxRows, cells: infinityCells(fxCols, fxRows, fxFrame, fxLabel) }))
   } else if (e.surface === 'terminal') {
     fxSize = null
   }
@@ -1230,6 +1242,7 @@ export function register(on) {
       description: 'Open or close the k8s pane beside the chat (Cluster, Argo CD, RCA, Lock)',
       immediate: true,
     })
+    await loadLabel($)
     await update($, view, v => ({ ...v, busy: 0, unlock: v.unlock ? { ...v.unlock, isBusy: false } : null }))
     if (await isOpen($)) {
       startTimer($)
@@ -1248,9 +1261,9 @@ export function register(on) {
     return { text: await openPane($, e.presentation), isTextDisplayOnly: true }
   })
 
-  // /k8s-handler:ui (commands/ui.md) opens the same pane; the markdown is
+  // /devops-assistant:ui (commands/ui.md) opens the same pane; the markdown is
   // only the fallback for a Claude Code that doesn't load mods.
-  on('command.run', { command: 'k8s-handler:ui' }, async ($, e) => ({
+  on('command.run', { command: 'devops-assistant:ui' }, async ($, e) => ({
     text: await openPane($, e.presentation),
     isTextDisplayOnly: true,
   })).catch(($, e, next) => next(e))

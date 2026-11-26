@@ -5,7 +5,7 @@ Goal: a clickable, expandable k8s view **on the right side of the Claude Code ch
 Built as a Claude Code **mod** (pane render site). Docs: https://code.claude.com/docs/en/plugins/mods/interface, https://code.claude.com/docs/en/plugins/mods/api, https://code.claude.com/docs/en/plugins/mods/reference
 
 ## Where it lives
-Add it to this plugin (`k8s-handler`); don't create a separate plugin:
+Add it to this plugin (`devops-assistant`); don't create a separate plugin:
 - `hooks/hooks.json`: add `"modules": ["./k8s-pane.js"]` next to the existing PreToolUse hook (keep that hook unchanged)
 - `hooks/k8s-pane.js`: the mod
 - tests next to it, using the mods test framework
@@ -19,7 +19,7 @@ Call the existing k8sh core, so redaction and the lock stay in one place:
 ## Command
 - `/k8s` opens the pane (`$.ui.open({ id: 'k8s', title: 'k8s', focus: true, closeOnEscape: true, columns: ~45% })`); running it again closes it.
 - Register with `immediate: true` so it opens while Claude is working.
-- `/k8s-handler:ui` should open the same pane (replaces the old tmux/split launcher).
+- `/devops-assistant:ui` should open the same pane (replaces the old tmux/split launcher).
 
 ## Pane layout (top to bottom)
 1. **Tab row** (plain Buttons, hotkeys 1-4): `Cluster` `Argo CD` `RCA` `Lock`. The active tab is not dimmed.
@@ -47,7 +47,7 @@ Call the existing k8sh core, so redaction and the lock stay in one place:
 ## Refresh
 - On open, on `⟳ Refresh`, and on tab or context change
 - A light timer (`$.clock.every(15000, …)`) only while the pane is open, and only for the visible tab
-- After any `mcp__plugin_k8s-handler_k8sh__*` tool call finishes (tool events), so the pane reflects what Claude just looked at
+- After any `mcp__plugin_devops-assistant_k8sh__*` tool call finishes (tool events), so the pane reflects what Claude just looked at
 
 ## Unlock from the pane (security-relevant)
 - `Unlock…` shows an `Input`: "Type the context name to allow ONE <action> on <kind/name>". Actions: `delete` for pods; `delete` or `scale-zero` for workloads.

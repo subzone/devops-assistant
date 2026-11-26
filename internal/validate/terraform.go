@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/subzone/k8s-handler/internal/redact"
+	"github.com/subzone/devops-assistant/internal/redact"
 )
 
 // IsTerraform reports whether path is (or contains at top level) Terraform/OpenTofu code.
