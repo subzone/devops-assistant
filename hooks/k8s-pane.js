@@ -898,6 +898,7 @@ export function autoVoice(listing) {
 
 /** @param {Engine} $ */
 async function pickVoice($) {
+  await findTools($)
   if (voiceSetting !== 'auto') {
     voiceName = voiceSetting
     return
@@ -908,6 +909,53 @@ async function pickVoice($) {
   } catch {
     voiceName = DEFAULT_VOICE
   }
+}
+
+// His better voice and his ears (/config): Piper, a local neural voice, and
+// whisper.cpp for speech to text, both on this machine, nothing sent out.
+let engineSetting = 'auto'
+let piperVoiceSetting = 'en_US-ryan-medium'
+let micSetting = 'default'
+let whisperSetting = '~/.local/share/whisper-models/ggml-base.en.bin'
+let hearingSends = false
+/** what was found at session start (empty: not there) */
+const tools = { home: '', tmp: '/tmp', piper: '', piperModel: '', ffmpeg: '', whisper: '', whisperModel: '' }
+/** afplay playing Piper's line: ending its stream stops it @type {ReturnType<Engine['process']['spawn']> | null} */
+let playback = null
+/** push to talk: recording now, and a press asking it to stop */
+const ear = { active: false, stop: false }
+
+/** @param {string} p */
+const expand = p => (p.startsWith('~/') ? tools.home + p.slice(1) : p)
+
+/** A program by name: the usual places, then PATH. @param {Engine} $ @param {string} name @param {string[]} places */
+async function findBin($, name, places) {
+  for (const p of places) if (await $.fs.exists(p).catch(() => false)) return p
+  try {
+    const r = await $.process.run(['/bin/sh', '-c', 'command -v "$0"', name], { timeoutMs: 5000 })
+    return r.exitCode === 0 ? r.stdout.trim() : ''
+  } catch {
+    return ''
+  }
+}
+
+/** @param {Engine} $ */
+async function findTools($) {
+  tools.home = (await $.env.get('HOME').catch(() => undefined)) ?? ''
+  tools.tmp = ((await $.env.get('TMPDIR').catch(() => undefined)) ?? '/tmp').replace(/\/$/, '')
+  const brew = ['/opt/homebrew/bin', '/usr/local/bin']
+  const [piper, ffmpeg, whisper] = await Promise.all([
+    engineSetting === 'say' ? '' : findBin($, 'piper', [`${tools.home}/.local/bin/piper`, ...brew.map(b => b + '/piper')]),
+    findBin($, 'ffmpeg', brew.map(b => b + '/ffmpeg')),
+    findBin($, 'whisper-cli', brew.map(b => b + '/whisper-cli')),
+  ])
+  tools.piper = piper
+  tools.ffmpeg = ffmpeg
+  tools.whisper = whisper
+  const model = /[/]|\.onnx$/.test(piperVoiceSetting) ? expand(piperVoiceSetting) : `${tools.home}/.local/share/piper-voices/${piperVoiceSetting}.onnx`
+  tools.piperModel = (await $.fs.exists(model).catch(() => false)) ? model : ''
+  const wm = expand(whisperSetting)
+  tools.whisperModel = (await $.fs.exists(wm).catch(() => false)) ? wm : ''
 }
 /** the model call reacting to the last answer, cut by the next @type {AbortController | null} */
 let reacting = null
@@ -1011,25 +1059,51 @@ async function say($, text, opts = {}) {
 
 /** @param {Engine} $ @param {string} line */
 async function speak($, line) {
-  steve.hush?.abort()
-  const hush = typeof AbortController === 'function' ? new AbortController() : null
-  steve.hush = hush
+  hush()
+  const hushed = typeof AbortController === 'function' ? new AbortController() : null
+  steve.hush = hushed
   steve.speaking = true
   try {
+    // Piper (local, neural) when it and its voice are there, else macOS say
+    if (engineSetting !== 'say' && tools.piper && tools.piperModel && (await speakPiper($, line, hushed))) return
+    if (hushed?.signal.aborted) return
     try {
-      await $.audio.speak(line, { voice: voiceName, ...(hush ? { signal: hush.signal } : {}) })
+      await $.audio.speak(line, { voice: voiceName, ...(hushed ? { signal: hushed.signal } : {}) })
     } catch (err) {
       // the chosen voice is not installed here: the system's default voice
-      if (hush?.signal.aborted) throw err
-      await $.audio.speak(line, hush ? { signal: hush.signal } : undefined)
+      if (hushed?.signal.aborted) throw err
+      await $.audio.speak(line, hushed ? { signal: hushed.signal } : undefined)
     }
   } catch {
     // no synthesizer, or cut off by the next line
   } finally {
-    if (steve.hush === hush) {
+    if (steve.hush === hushed) {
       steve.speaking = false
       steve.hush = null
     }
+  }
+}
+
+/**
+ * Piper renders the line to a WAV, afplay plays it; true once played (or
+ * cut off by the next line), false when Piper failed and say should try.
+ * @param {Engine} $ @param {string} line @param {AbortController | null} hushed
+ */
+async function speakPiper($, line, hushed) {
+  const wav = `${tools.tmp}/steve-${Math.random().toString(36).slice(2)}.wav`
+  try {
+    const r = await $.process.run([tools.piper, '-m', tools.piperModel, '-f', wav], { stdin: line, timeoutMs: 30000 })
+    if (r.exitCode !== 0) return false
+    if (hushed?.signal.aborted) return true
+    const play = $.process.spawn({ argv: ['/usr/bin/afplay', wav] })
+    playback = play
+    for await (const _ of play) if (hushed?.signal.aborted) break
+    return true
+  } catch {
+    return false
+  } finally {
+    playback = null
+    void $.process.run(['/bin/rm', '-f', wav]).catch(() => undefined)
   }
 }
 
@@ -1037,6 +1111,94 @@ function hush() {
   steve.hush?.abort()
   steve.hush = null
   steve.speaking = false
+  // cuts afplay off mid-line: ending its stream kills it
+  void playback?.return({ code: null, signal: 'SIGTERM' })
+  playback = null
+}
+
+/**
+ * Steve's ears: push to talk. The first press records the microphone
+ * (ffmpeg, avfoundation) until you stop talking (its silence detector), a
+ * second press, or 30 s; whisper.cpp turns it into text on this machine; the
+ * text goes into the prompt box (or is sent, with steveHearingSends on).
+ * Nothing records unless the person pressed the button.
+ * @param {Engine} $
+ */
+async function hear($) {
+  if (ear.active) {
+    ear.stop = true
+    return
+  }
+  if (!tools.ffmpeg || !tools.whisper || !tools.whisperModel) {
+    await notify($, `Steve can't hear yet: he needs ${[!tools.ffmpeg && 'ffmpeg', !tools.whisper && 'whisper-cli', !tools.whisperModel && `a Whisper model at ${whisperSetting}`].filter(Boolean).join(', ')}. See the README.`, true)
+    return
+  }
+  hush()
+  ear.active = true
+  ear.stop = false
+  const id = Math.random().toString(36).slice(2)
+  const raw = `${tools.tmp}/steve-ear-${id}.raw`
+  const wav = `${tools.tmp}/steve-ear-${id}.wav`
+  try {
+    await update($, view, w => ({ ...w, ear: /** @type {const} */ ('rec') }))
+    steve.thinking = false
+    steve.listenUntil = fxFrame + F(31000)
+    steve.bubble = steveLine('hearing', salty)
+    steve.bubbleUntil = fxFrame + F(31000)
+    let log = ''
+    let spoke = false
+    try {
+      // raw PCM, so a recording cut off by a press still decodes
+      const rec = $.process.spawn({
+        argv: [tools.ffmpeg, '-hide_banner', '-nostdin', '-stats', '-f', 'avfoundation', '-i', ':' + micSetting, '-t', '30', '-ac', '1', '-ar', '16000', '-af', 'silencedetect=noise=-35dB:d=1.2', '-f', 's16le', '-y', raw],
+      })
+      for await (const { text } of rec) {
+        log = (log + text).slice(-4000)
+        if (ear.stop) break
+        if (/silence_end:/.test(text)) spoke = true
+        // a pause after speech: done (the leading silence starts at 0)
+        if ([...text.matchAll(/silence_start: (-?[\d.]+)/g)].some(m => Number(m[1]) > 0.6)) break
+        // nothing said for 8 s: give up
+        const t = /time=(\d+):(\d+):([\d.]+)/.exec(text)
+        if (!spoke && t && Number(t[1]) * 3600 + Number(t[2]) * 60 + Number(t[3]) > 8 && /silence_start: 0\b|silence_start: -?0\.\d/.test(log)) break
+      }
+    } catch (err) {
+      log += msg(err)
+    }
+    steve.listenUntil = 0
+    steve.bubbleUntil = 0
+    const size = (await $.fs.exists(raw)) ? (await $.fs.stat(raw)).size : 0
+    if (size < 16000 * 2 * 0.4) {
+      const deaf = /not authori[sz]ed|permission|Input\/output error|Error opening input|Could not|No such device/i.test(log)
+      await say($, steveLine(deaf ? 'deaf' : 'heardNothing', salty), { mood: 'oops', moodMs: 1200, aloud: !deaf })
+      return
+    }
+    await update($, view, w => ({ ...w, ear: /** @type {const} */ ('stt') }))
+    steve.thinking = true
+    const conv = await $.process.run([tools.ffmpeg, '-loglevel', 'error', '-y', '-f', 's16le', '-ar', '16000', '-ac', '1', '-i', raw, wav], { timeoutMs: 30000 })
+    if (conv.exitCode !== 0) throw new Error(conv.stderr.trim() || 'ffmpeg could not convert the recording')
+    const r = await $.process.run([tools.whisper, '-m', tools.whisperModel, '-f', wav, '-nt', '-np', '-l', 'en'], { timeoutMs: 120000 })
+    steve.thinking = false
+    const heard = r.stdout
+      .replace(/\[[A-Z_ ]+\]|\([a-z ]+\)/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (r.exitCode !== 0 || !heard) {
+      await say($, steveLine('heardNothing', salty), { mood: 'oops', moodMs: 1200 })
+      return
+    }
+    if (hearingSends) await $.prompt.submit({ text: heard, asUser: true })
+    else await $.prompt.fill({ text: heard, mode: 'append' })
+    await say($, `“${cut(heard, 90)}”`, { aloud: false })
+  } catch (err) {
+    steve.thinking = false
+    await notify($, `Steve couldn't hear: ${cut(msg(err), 200)}`, true)
+  } finally {
+    ear.active = false
+    steve.listenUntil = 0
+    await update($, view, w => ({ ...w, ear: undefined }))
+    void $.process.run(['/bin/rm', '-f', raw, wav]).catch(() => undefined)
+  }
 }
 
 /** What Claude is doing, from the tool it calls; names a kind, never arguments' values. @param {Record<string, unknown>} e */
@@ -1478,6 +1640,16 @@ async function draw($, e) {
       v.busy > 0 ? h(Text, { dimColor: true }, 'loading…') : null,
       Raster ? h(Button, { key: 'look', label: LOOK_LABEL[look], plain: true, dimColor: look === 'off', onPress: () => cycleLook($) }) : null,
       Raster && look === 'steve' ? h(Button, { key: 'voice', label: v.voice ? '♪ voice on' : '♪ voice off', plain: true, dimColor: !v.voice, onPress: () => toggleVoice($) }) : null,
+      e.surface === 'terminal'
+        ? h(Button, {
+            key: 'talk',
+            label: v.ear === 'rec' ? '● listening… (press to stop)' : v.ear === 'stt' ? '… transcribing' : '🎤 talk',
+            plain: true,
+            color: v.ear === 'rec' ? 'error' : undefined,
+            dimColor: v.ear === 'stt',
+            onPress: () => hear($),
+          })
+        : null,
     ),
   )
 
@@ -1709,6 +1881,11 @@ async function openPane($, presentation) {
 export function register(on, options) {
   if (typeof options?.steveVoice === 'string' && options.steveVoice) voiceSetting = options.steveVoice
   if (typeof options?.steveSwearing === 'boolean') salty = options.steveSwearing
+  if (typeof options?.steveEngine === 'string' && options.steveEngine) engineSetting = options.steveEngine
+  if (typeof options?.stevePiperVoice === 'string' && options.stevePiperVoice) piperVoiceSetting = options.stevePiperVoice
+  if (typeof options?.steveMicrophone === 'string' && options.steveMicrophone) micSetting = options.steveMicrophone
+  if (typeof options?.steveWhisperModel === 'string' && options.steveWhisperModel) whisperSetting = options.steveWhisperModel
+  if (typeof options?.steveHearingSends === 'boolean') hearingSends = options.steveHearingSends
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -1718,7 +1895,7 @@ export function register(on, options) {
     })
     await loadLabel($)
     void pickVoice($)
-    await update($, view, v => ({ ...v, busy: 0, unlock: v.unlock ? { ...v.unlock, isBusy: false } : null }))
+    await update($, view, v => ({ ...v, busy: 0, unlock: v.unlock ? { ...v.unlock, isBusy: false } : null, ear: undefined }))
     if (await isOpen($)) {
       startTimer($)
       $.clock.after(1, () => {

@@ -59,6 +59,8 @@ export type K8sView = {
   filter?: string
   /** hide ✔ rows at every level */
   problemsOnly?: boolean
+  /** Steve's ears: recording ('rec') or transcribing ('stt'); absent when idle */
+  ear?: 'rec' | 'stt'
 }
 
 export type K8sContext = { name: string; tier: string; current: boolean }

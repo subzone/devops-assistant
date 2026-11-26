@@ -25,7 +25,7 @@ export function persona(salty) {
   ].join('\n')
 }
 
-/** @typedef {'greet' | 'voiceOn' | 'stopped' | 'done' | 'granted' | 'refused' | 'wrongName' | 'broke' | 'brokeMany'} Moment */
+/** @typedef {'greet' | 'voiceOn' | 'stopped' | 'done' | 'granted' | 'refused' | 'wrongName' | 'broke' | 'brokeMany' | 'hearing' | 'heardNothing' | 'deaf'} Moment */
 
 /** Canned lines by moment; {x} is the object, {n} a count. @type {Record<Moment, { clean: string[], salty: string[] }>} */
 const LINES = {
@@ -64,6 +64,18 @@ const LINES = {
   brokeMany: {
     clean: ['{x}, and {n} more broken. Wonderful.', 'Uh oh: {x}, plus {n} more. Of course.'],
     salty: ['{x} and {n} more. Who created this mess?', 'Uh oh: {x}, plus {n} more. This is crap.'],
+  },
+  hearing: {
+    clean: ['Go on. I am listening.', 'Talk. Keep it short.'],
+    salty: ['Go on, I am listening. Damn it.', 'Talk. And make it quick, hell.'],
+  },
+  heardNothing: {
+    clean: ['I did not catch a thing. Try again.', 'Nothing. Speak up.'],
+    salty: ['I heard nothing. Speak up, damn it.', 'What the hell was that? Nothing. Again.'],
+  },
+  deaf: {
+    clean: ['I cannot hear you. Allow the microphone for your terminal in System Settings, Privacy and Security, Microphone.'],
+    salty: ['I am deaf, damn it. Allow the microphone for your terminal in System Settings, Privacy and Security, Microphone.'],
   },
 }
 

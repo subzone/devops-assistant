@@ -90,10 +90,28 @@ type World = {
   installed: string
   /** deploy/api's labelled pods (a rollout replaces them) */
   pods: unknown[]
+  /** programs `command -v` finds, by name */
+  bins: Record<string, string>
+  /** whether every file asked about exists (voice models, recordings) */
+  exists: boolean
+  /** a recording's size in bytes */
+  recorded: number
+  /** what ffmpeg prints while recording, piece by piece */
+  mic: string[]
+  /** what whisper-cli hears */
+  transcript: string
+  /** lines handed to piper */
+  piped: (string | undefined)[]
+  /** argv of every spawned process */
+  spawned: (readonly string[])[]
+  /** argv of the speech tools' runs */
+  speechRuns: (readonly string[])[]
+  /** text put in the prompt box */
+  filled: string[]
 }
 
 function world(on: On): World {
-  const w: World = { calls: [], runs: [], submitted: [], status: { text: undefined }, closed: 0, grants: [], argoInstalled: true, blits: [], spoken: [], voices: [], asked: [], quip: '"Of course it got OOMKilled. Who the hell set that memory limit?"', installed: 'Fred                en_US    # Hello! My name is Fred.\nRocko (English (US)) en_US    # Hello! My name is Rocko.\n', pods: [pod('api-1', '', 0, ''), pod('api-2', 'CrashLoopBackOff', 7, 'OOMKilled')] }
+  const w: World = { calls: [], runs: [], submitted: [], status: { text: undefined }, closed: 0, grants: [], argoInstalled: true, blits: [], spoken: [], voices: [], asked: [], quip: '"Of course it got OOMKilled. Who the hell set that memory limit?"', installed: 'Fred                en_US    # Hello! My name is Fred.\nRocko (English (US)) en_US    # Hello! My name is Rocko.\n', pods: [pod('api-1', '', 0, ''), pod('api-2', 'CrashLoopBackOff', 7, 'OOMKilled')], bins: {}, exists: false, recorded: 64000, mic: [], transcript: '', piped: [], spawned: [], speechRuns: [], filled: [] }
   let open = false
 
   on('command.register', (_, e) => ({ value: { command: e.name } }))
@@ -114,6 +132,20 @@ function world(on: On): World {
   on('ui.blit', (_, e) => {
     w.blits.push(e as World['blits'][number])
     return { value: {} }
+  })
+  // models and recordings; programs are found through `command -v` (w.bins)
+  on('fs.exists', (_, e) => ({ value: w.exists && !/\/(piper|ffmpeg|whisper-cli)$/.test(e.path) }))
+  on('fs.stat', () => ({ value: { kind: 'file' as const, size: w.recorded, mtimeMs: 0, isLink: false } }))
+  on('process.spawn', async function* (_, e) {
+    w.spawned.push(e.argv)
+    // (the kit wants at least one chunk, each with some text)
+    if (e.argv[0] === w.bins.ffmpeg) for (const text of w.mic) yield { stream: 'stderr' as const, text }
+    else yield { stream: 'stdout' as const, text: '\n' }
+    return { value: { code: 0, signal: null } }
+  })
+  on('prompt.fill', (_, e) => {
+    w.filled.push(e.text)
+    return { isFilled: true }
   })
   on('prompt.edit', (_, e) => ({ text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end), cursor: e.start + e.inputText.length }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
@@ -199,8 +231,18 @@ function world(on: On): World {
   })
   on('process.run', (_, e) => {
     const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
-    // Steve's voice check, apart from the k8sh runs the tests count
+    // Steve's voice and ears, apart from the k8sh runs the tests count
     if (e.argv[0] === 'say') return ok(w.installed)
+    if (e.argv[0] === '/bin/sh' && e.argv[1] === '-c') {
+      const found = w.bins[String(e.argv[3])]
+      return found ? ok(found + '\n') : { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    if (e.argv[0] === '/bin/rm') return ok('')
+    if (Object.values(w.bins).includes(String(e.argv[0]))) {
+      w.speechRuns.push(e.argv)
+      if (e.argv[0] === w.bins.piper) w.piped.push((e as { init?: { stdin?: string } }).init?.stdin)
+      return ok(e.argv[0] === w.bins['whisper-cli'] ? w.transcript : '')
+    }
     w.runs.push(e)
     if (e.argv[1] === 'ui-init') return ok('/home/u/.k8sh/ui.token\n')
     if (e.argv[1] === 'grant-from-ui') {
@@ -680,6 +722,42 @@ test('filter and problems only narrow the tree; actions sit above it; it trims w
   expect(await ui.find({ key: 'crumb:' + POD })).toBeUndefined()
   expect(await ui.find({ key: 'crumb:' + DEPLOY })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /pod\/api-2 is gone/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('Steve speaks with Piper when it is installed, and hears you through whisper.cpp when you press 🎤 talk', async ($, on) => {
+  const { w, ui } = await openPane($, on)
+  // not installed: 🎤 says what is missing, and nothing records
+  await ui.press({ key: 'talk' })
+  expect(await ui.find({ type: 'Text', text: /Steve can't hear yet: he needs ffmpeg, whisper-cli/ })).toBeDefined()
+  expect(w.spawned).toEqual([])
+
+  w.bins = { piper: '/u/.local/bin/piper', ffmpeg: '/opt/homebrew/bin/ffmpeg', 'whisper-cli': '/opt/homebrew/bin/whisper-cli' }
+  w.exists = true
+
+  // voice on: the line goes to Piper and afplay, not to say
+  await ui.press({ key: 'voice' })
+  expect(w.piped).toHaveLength(1)
+  expect(linesFor('voiceOn', true)).toContain(w.piped[0])
+  expect(w.speechRuns.find(a => a[0] === w.bins.piper)).toContain('-m')
+  expect(w.spawned.some(a => a[0] === '/usr/bin/afplay')).toBe(true)
+  expect(w.spoken).toEqual([])
+
+  // 🎤: ffmpeg records the default microphone until a pause after speech, whisper turns it into text, into the prompt box
+  w.mic = ['size=N/A time=00:00:00.50\n', '[silencedetect @ 0x1] silence_start: 0\n', '[silencedetect @ 0x1] silence_end: 0.9 | silence_duration: 0.9\n', 'size=N/A time=00:00:02.00\n', '[silencedetect @ 0x1] silence_start: 2.4\n']
+  w.transcript = ' Why is api-2 crash looping? [BLANK_AUDIO]\n'
+  await ui.press({ key: 'talk' })
+  const rec = w.spawned.find(a => a[0] === w.bins.ffmpeg) ?? []
+  expect(rec).toEqual(expect.arrayContaining(['-f', 'avfoundation', '-i', ':default', '-t', '30']))
+  expect(w.speechRuns.find(a => a[0] === w.bins['whisper-cli'])).toEqual(expect.arrayContaining(['-l', 'en']))
+  expect(w.filled).toEqual(['Why is api-2 crash looping?'])
+  expect(w.submitted.map(s => s.text)).not.toContain('Why is api-2 crash looping?')
+  expect((await ui.find({ key: 'talk' }))?.text).toContain('talk')
+
+  // too short to be speech: nothing goes in, and he says so
+  w.recorded = 100
+  await ui.press({ key: 'talk' })
+  expect(w.filled).toHaveLength(1)
   await ui.unmount()
 })
 

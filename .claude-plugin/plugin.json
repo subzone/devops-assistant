@@ -1,6 +1,6 @@
 {
   "name": "devops-assistant",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "types": "./types/index.d.ts",
   "description": "GitOps-first Kubernetes operations for Claude: Argo CD/Workflows, Helm, Kustomize, RCA, validation and security gates, with a hard lock on destructive actions and zero credential exposure.",
   "author": {
@@ -17,6 +17,37 @@
       "description": "The macOS voice Steve speaks with when ♪ voice is on in the k8s pane. auto picks the most natural English voice installed: one marked (Premium), then (Enhanced), else Rocko. Download more natural voices in System Settings → Accessibility → Spoken Content → System voice → Manage Voices. A voice that is not installed falls back to the system default.",
       "default": "auto",
       "options": ["auto", "Rocko (English (US))", "Reed (English (US))", "Eddy (English (US))", "Grandpa (English (US))", "Ralph", "Fred", "Daniel"]
+    },
+    "steveEngine": {
+      "type": "string",
+      "title": "Steve's speech engine",
+      "description": "piper: a local neural voice (much less robotic; needs piper and a voice model, see stevePiperVoice). say: the macOS voices. auto: piper when it and its voice are installed, else say. Both run on this machine.",
+      "default": "auto",
+      "options": ["auto", "piper", "say"]
+    },
+    "stevePiperVoice": {
+      "type": "string",
+      "title": "Steve's Piper voice",
+      "description": "A Piper voice name in ~/.local/share/piper-voices (download with: python -m piper.download_voices --download-dir ~/.local/share/piper-voices en_US-ryan-medium), or a full path to an .onnx model.",
+      "default": "en_US-ryan-medium"
+    },
+    "steveMicrophone": {
+      "type": "string",
+      "title": "Steve's microphone",
+      "description": "The microphone 🎤 talk records from: default, or an input device's name or index as `ffmpeg -f avfoundation -list_devices true -i \"\"` lists them.",
+      "default": "default"
+    },
+    "steveWhisperModel": {
+      "type": "string",
+      "title": "Whisper model",
+      "description": "The whisper.cpp model 🎤 talk transcribes with, on this machine. ggml-base.en.bin is fast and good for English.",
+      "default": "~/.local/share/whisper-models/ggml-base.en.bin"
+    },
+    "steveHearingSends": {
+      "type": "boolean",
+      "title": "Send what Steve hears",
+      "description": "Off: what you say goes into the prompt box for you to check and send. On: it is sent at once.",
+      "default": false
     },
     "steveSwearing": {
       "type": "boolean",
