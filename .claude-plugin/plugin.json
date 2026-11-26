@@ -1,6 +1,6 @@
 {
   "name": "devops-assistant",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "types": "./types/index.d.ts",
   "description": "GitOps-first Kubernetes operations for Claude: Argo CD/Workflows, Helm, Kustomize, RCA, validation and security gates, with a hard lock on destructive actions and zero credential exposure.",
   "author": {

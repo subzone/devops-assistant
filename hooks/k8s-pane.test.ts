@@ -27,7 +27,7 @@ const POD = DEPLOY + '/pod:api-2'
 const CONTAINER = POD + '/c:app'
 
 const pod = (name: string, waiting: string, restarts: number, last: string) => ({
-  metadata: { name, labels: { app: 'api' } },
+  metadata: { name, namespace: 'payments', labels: { app: 'api' } },
   spec: { nodeName: 'k3d-agent-0', containers: [{ name: 'app' }] },
   status: {
     phase: 'Running',
@@ -44,6 +44,31 @@ const pod = (name: string, waiting: string, restarts: number, last: string) => (
     ],
   },
 })
+
+const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
+
+// in deploy/api only by its ReplicaSet (no app label): restarted 5 minutes ago, 2 days old
+const api3 = {
+  metadata: { name: 'api-3', namespace: 'payments', labels: { 'pod-template-hash': '6b8d' }, ownerReferences: [{ kind: 'ReplicaSet', name: 'api-6b8d', controller: true }] },
+  spec: { nodeName: 'k3d-agent-1', containers: [{ name: 'app' }] },
+  status: {
+    phase: 'Running',
+    startTime: ago(2 * 86400e3),
+    conditions: [{ type: 'Ready', status: 'True' }],
+    containerStatuses: [{ name: 'app', image: 'ghcr.io/acme/api:1.4.2', ready: true, restartCount: 3, state: { running: {} }, lastState: { terminated: { reason: 'Error', exitCode: 1, finishedAt: ago(5 * 60e3) } } }],
+  },
+}
+
+// a Job's pod stuck in its init container
+const migrate = {
+  metadata: { name: 'migrate-x7', namespace: 'payments', labels: { 'job-name': 'migrate' }, ownerReferences: [{ kind: 'Job', name: 'migrate', controller: true }] },
+  spec: { containers: [{ name: 'run' }] },
+  status: {
+    phase: 'Pending',
+    initContainerStatuses: [{ name: 'wait-db', image: 'busybox:1.36', ready: false, restartCount: 4, state: { waiting: { reason: 'CrashLoopBackOff' } }, lastState: {} }],
+    containerStatuses: [{ name: 'run', image: 'ghcr.io/acme/migrate:2', ready: false, restartCount: 0, state: { waiting: { reason: 'PodInitializing' } }, lastState: {} }],
+  },
+}
 
 type Call = { server: string; tool: string; args: Record<string, unknown> }
 type Run = { argv: readonly string[]; init?: { stdin?: string } }
@@ -63,10 +88,12 @@ type World = {
   quip: string
   /** what `say -v '?'` lists */
   installed: string
+  /** deploy/api's labelled pods (a rollout replaces them) */
+  pods: unknown[]
 }
 
 function world(on: On): World {
-  const w: World = { calls: [], runs: [], submitted: [], status: { text: undefined }, closed: 0, grants: [], argoInstalled: true, blits: [], spoken: [], voices: [], asked: [], quip: '"Of course it got OOMKilled. Who the hell set that memory limit?"', installed: 'Fred                en_US    # Hello! My name is Fred.\nRocko (English (US)) en_US    # Hello! My name is Rocko.\n' }
+  const w: World = { calls: [], runs: [], submitted: [], status: { text: undefined }, closed: 0, grants: [], argoInstalled: true, blits: [], spoken: [], voices: [], asked: [], quip: '"Of course it got OOMKilled. Who the hell set that memory limit?"', installed: 'Fred                en_US    # Hello! My name is Fred.\nRocko (English (US)) en_US    # Hello! My name is Rocko.\n', pods: [pod('api-1', '', 0, ''), pod('api-2', 'CrashLoopBackOff', 7, 'OOMKilled')] }
   let open = false
 
   on('command.register', (_, e) => ({ value: { command: e.name } }))
@@ -137,7 +164,11 @@ function world(on: On): World {
             }),
           )
         if (a.kind === 'pods')
-          return text(JSON.stringify({ items: [pod('api-1', '', 0, ''), pod('api-2', 'CrashLoopBackOff', 7, 'OOMKilled'), { metadata: { name: 'job-x', labels: {} }, spec: {}, status: { phase: 'Succeeded' } }] }))
+          return text(
+            JSON.stringify({
+              items: [...w.pods, api3, migrate, { metadata: { name: 'job-x', namespace: 'payments', labels: {} }, spec: {}, status: { phase: 'Succeeded' } }],
+            }),
+          )
         return fail('unexpected kind')
       case 'k8s_logs':
         return text(a.previous ? 'previous run\nOOM: killed' : 'line1\nline2 password=s3cr3t')
@@ -572,5 +603,83 @@ test('Steve’s persona: grumpy either way, mild swearing only when salty', () =
   expect(persona(false)).toContain('No swearing at all')
   for (const l of linesFor('broke', false)) expect(l).not.toMatch(/crap|damn|hell/i)
   for (const l of linesFor('broke', true)) expect(l).toContain('{x}')
+})
+
+test('namespaces carry their pods’ health, broken first; owners, Jobs, init containers, age and last restart are read', async ($, on) => {
+  const { w, ui } = await openPane($, on)
+  // one all-namespaces pods call gives the counts
+  expect(tool(w, 'k8s_get').some(c => c.args.kind === 'pods' && c.args.allNamespaces === true)).toBe(true)
+  expect((await row(ui, NS))?.text).toContain('payments  ✖2')
+  expect((await row(ui, 'cluster/ns:kube-system'))?.text).not.toContain('✖')
+  const order = (await ui.findAll({ type: 'Button' })).map(b => b.key ?? '').filter(k => k.startsWith('row:cluster/ns:'))
+  expect(order).toEqual(['row:' + NS, 'row:cluster/ns:kube-system'])
+
+  // Ask Claude with nothing selected names the broken namespace
+  await ui.press({ key: 'act:ask' })
+  expect(w.submitted.at(-1)?.text).toContain('✖ payments  ✖2')
+
+  for (const id of [NS, NS, DEPLOY, DEPLOY]) await ui.press({ key: 'row:' + id })
+  // in deploy/api by its ReplicaSet owner, though it has no app label; restarts with when, and age
+  const a3 = (await row(ui, DEPLOY + '/pod:api-3'))?.text
+  expect(a3).toContain('r:3 (last 5m ago)')
+  expect(a3).toContain('age 2d')
+  // a Job's pods under the Job; the init container's crash is the reason
+  expect((await row(ui, NS + '/Job:migrate'))?.text).toContain('job/migrate  0/1 succeeded')
+  await ui.press({ key: 'row:' + NS + '/Job:migrate' })
+  await ui.press({ key: 'row:' + NS + '/Job:migrate' })
+  const mig = await row(ui, NS + '/Job:migrate/pod:migrate-x7')
+  expect(mig?.text).toContain('Pending Init:CrashLoopBackOff r:4')
+  expect(mig?.text).toContain('✖')
+  await ui.press({ key: 'row:' + NS + '/Job:migrate/pod:migrate-x7' })
+  await ui.press({ key: 'row:' + NS + '/Job:migrate/pod:migrate-x7' })
+  expect((await row(ui, NS + '/Job:migrate/pod:migrate-x7/c:wait-db'))?.text).toContain('init:wait-db  CrashLoopBackOff  r:4')
+  await ui.unmount()
+
+  // the widget counts pods, not namespaces
+  const widget = await $.ui.mount({ ...PANE, surface: 'desktop', props: { ...PANE.props, placement: 'widget' } })
+  expect(await widget.find({ type: 'Text', text: '2 error · 0 warning' })).toBeDefined()
+  await widget.unmount()
+})
+
+test('filter and problems only narrow the tree; actions sit above it; it trims while a detail is open; a replaced pod falls back to its workload', async ($, on) => {
+  const { w, ui } = await openPane($, on)
+  // the filter narrows the top level as you type
+  await ui.input({ key: 'filter', text: 'kube', kind: 'change' })
+  expect(await row(ui, NS)).toBeUndefined()
+  expect(await row(ui, 'cluster/ns:kube-system')).toBeDefined()
+  await ui.input({ key: 'filter', text: 'zzz', kind: 'change' })
+  expect(await ui.find({ type: 'Text', text: /nothing matches/ })).toBeDefined()
+  await ui.press({ key: 'filter-clear' })
+  // problems only hides ✔ rows
+  await ui.press({ key: 'problems' })
+  expect(await row(ui, NS)).toBeDefined()
+  expect(await row(ui, 'cluster/ns:kube-system')).toBeUndefined()
+  await ui.press({ key: 'problems' })
+  expect(await row(ui, 'cluster/ns:kube-system')).toBeDefined()
+
+  // the actions come before the tree
+  const keys = (await ui.findAll({ type: 'Button' })).map(b => b.key ?? '')
+  expect(keys.indexOf('act:refresh')).toBeGreaterThanOrEqual(0)
+  expect(keys.indexOf('act:refresh')).toBeLessThan(keys.indexOf('row:' + NS))
+
+  // many pods: with api-2's logs open, the tree shows only the rows around it
+  w.pods = [...w.pods, ...Array.from({ length: 14 }, (_, i) => pod(`api-x${i}`, '', 0, ''))]
+  for (const id of [NS, NS, DEPLOY, DEPLOY, POD]) await ui.press({ key: 'row:' + id })
+  const all = (await ui.findAll({ type: 'Button' })).filter(b => b.key?.startsWith('row:')).length
+  await ui.press({ key: 'act:logs' })
+  const trimmed = (await ui.findAll({ type: 'Button' })).filter(b => b.key?.startsWith('row:')).length
+  expect(all).toBeGreaterThan(12)
+  expect(trimmed).toBeLessThanOrEqual(12)
+  expect(await row(ui, POD)).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /rows below/ })).toBeDefined()
+  await ui.press({ key: 'detail-close' })
+
+  // a rollout replaces api-2: the selection falls back to deploy/api, and the pane says so
+  w.pods = [pod('api-1', '', 0, ''), pod('api-9', '', 0, '')]
+  await ui.press({ key: 'act:refresh' })
+  expect(await ui.find({ key: 'crumb:' + POD })).toBeUndefined()
+  expect(await ui.find({ key: 'crumb:' + DEPLOY })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /pod\/api-2 is gone/ })).toBeDefined()
+  await ui.unmount()
 })
 

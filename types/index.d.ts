@@ -23,6 +23,8 @@ export type K8sNode = {
   detail: string[]
   /** children load when it is first expanded */
   lazy: boolean
+  /** a Namespace's failing (✖) and not-ready (⚠) pods */
+  counts?: { err: number; warn: number }
 }
 
 export type K8sDetail = { title: string; text: string }
@@ -53,6 +55,10 @@ export type K8sView = {
   look?: 'steve' | 'infinity' | 'off'
   /** Steve speaks his lines aloud (macOS `say`); absent means off */
   voice?: boolean
+  /** top-level rows whose label holds this text (any case) */
+  filter?: string
+  /** hide ✔ rows at every level */
+  problemsOnly?: boolean
 }
 
 export type K8sContext = { name: string; tier: string; current: boolean }

@@ -25,6 +25,8 @@ import { line as steveLine, persona, toolLine as steveTool } from './steve-lines
 const PANE = 'k8s'
 const TOOL_PREFIX = 'mcp__plugin_devops-assistant_k8sh__'
 const PAGE = 30
+/** tree rows shown while a detail (logs, describe…) or the unlock is open */
+const TREE_WHILE_DETAIL = 12
 const REFRESH_MS = 15000
 const DETAIL_MAX_LINES = 300
 const WORKLOADS = ['Deployment', 'StatefulSet', 'DaemonSet']
@@ -211,22 +213,62 @@ async function loadGrants($) {
 
 // ---------- loaders: each returns the nodes under one parent, in order ----------
 
-/** @param {Engine} $ @param {string} ctx @returns {Promise<K8sNode[]>} */
-async function loadNamespaces($, ctx) {
-  const j = await callJSON($, 'k8s_get', { kind: 'namespaces', context: ctx })
-  return list(dig(j, 'items')).map(it => {
+/** Pod health counts per namespace, per context, and when they were taken. @type {Map<string, { at: number, byNs: Map<string, { err: number, warn: number, total: number }> }>} */
+const podCounts = new Map()
+// The quiet 15 s refresh reuses counts this young: one all-namespaces pods
+// call a minute at most, not every tick, on a big cluster.
+const COUNTS_MS = 60000
+
+/**
+ * ✖/⚠ pod counts per namespace, from one all-namespaces pods call; null when
+ * that call fails (the namespaces still show).
+ * @param {Engine} $ @param {string} ctx @param {boolean} quiet
+ */
+async function namespaceCounts($, ctx, quiet) {
+  const now = Date.now()
+  const hit = podCounts.get(ctx)
+  if (quiet && hit && now - hit.at < COUNTS_MS) return hit.byNs
+  try {
+    const j = await callJSON($, 'k8s_get', { kind: 'pods', allNamespaces: true, context: ctx })
+    /** @type {Map<string, { err: number, warn: number, total: number }>} */
+    const byNs = new Map()
+    for (const p of list(dig(j, 'items'))) {
+      const ns = str(p, 'metadata', 'namespace')
+      const c = byNs.get(ns) ?? { err: 0, warn: 0, total: 0 }
+      const st = podHealth(p, now).st
+      c.total += 1
+      if (st === 'err') c.err += 1
+      else if (st === 'warn') c.warn += 1
+      byNs.set(ns, c)
+    }
+    podCounts.set(ctx, { at: now, byNs })
+    return byNs
+  } catch {
+    return hit?.byNs ?? null
+  }
+}
+
+/** @param {K8sStatus} s */
+const rank = s => (s === 'err' ? 2 : s === 'warn' ? 1 : 0)
+
+/** @param {Engine} $ @param {string} ctx @param {boolean} quiet @returns {Promise<K8sNode[]>} */
+async function loadNamespaces($, ctx, quiet) {
+  const [j, counts] = await Promise.all([callJSON($, 'k8s_get', { kind: 'namespaces', context: ctx }), namespaceCounts($, ctx, quiet)])
+  const nodes = list(dig(j, 'items')).map(it => {
     const name = str(it, 'metadata', 'name')
     const phase = str(it, 'status', 'phase')
-    return mk('cluster', 'cluster', 'ns:' + name, {
-      label: name,
-      status: phase === 'Active' ? 'ok' : 'warn',
-      kind: 'Namespace',
-      ns: name,
-      name,
-      lazy: true,
-      detail: [`Namespace ${name}`, `phase: ${phase}`, `created: ${str(it, 'metadata', 'creationTimestamp')}`],
-    })
+    const c = counts?.get(name)
+    /** @type {K8sStatus} */
+    const status = c && c.err > 0 ? 'err' : (c && c.warn > 0) || phase !== 'Active' ? 'warn' : 'ok'
+    let label = name
+    if (c?.err) label += `  ✖${c.err}`
+    if (c?.warn) label += `${c.err ? ' ' : '  '}⚠${c.warn}`
+    const detail = [`Namespace ${name}`, `phase: ${phase}`, `created: ${str(it, 'metadata', 'creationTimestamp')}`]
+    if (c) detail.push(`pods: ${c.total} (${c.err} failing, ${c.warn} not ready)`)
+    return mk('cluster', 'cluster', 'ns:' + name, { label, status, kind: 'Namespace', ns: name, name, lazy: true, detail, counts: c ? { err: c.err, warn: c.warn } : undefined })
   })
+  // broken namespaces first, as Argo CD apps are
+  return nodes.sort((x, y) => rank(y.status) - rank(x.status) || x.name.localeCompare(y.name))
 }
 
 /** @param {unknown} o */
@@ -237,62 +279,128 @@ function conditions(o) {
   })
 }
 
-/** @param {unknown} p @param {string} ns @param {string} parent @returns {K8sNode[]} */
-function podNodes(p, ns, parent) {
-  const name = str(p, 'metadata', 'name')
+// Waiting reasons that mean a container is only on its way up, not broken.
+const STARTING = new Set(['ContainerCreating', 'PodInitializing'])
+
+/** How long ago, short: 45s, 12m, 5h, 3d. @param {number} ms epoch ms @param {number} now */
+function ago(ms, now) {
+  const s = Math.max(0, Math.round((now - ms) / 1000))
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m`
+  if (s < 48 * 3600) return `${Math.floor(s / 3600)}h`
+  return `${Math.floor(s / 86400)}d`
+}
+
+/**
+ * A pod's health, init containers included, and one line per container.
+ * @param {unknown} p @param {number} now
+ */
+function podHealth(p, now) {
   const phase = str(p, 'status', 'phase')
-  const id = parent + '/pod:' + name
   /** @type {K8sStatus} */
   let st = 'ok'
   let restarts = 0
-  let reason = ''
-  /** @type {K8sNode[]} */
-  const kids = []
-  for (const cs of list(dig(p, 'status', 'containerStatuses'))) {
-    /** @type {K8sStatus} */
-    let cst = 'ok'
-    const cname = str(cs, 'name')
-    const r = num(cs, 'restartCount')
-    restarts += r
-    let state = 'running'
-    const waiting = str(cs, 'state', 'waiting', 'reason')
-    const terminated = str(cs, 'state', 'terminated', 'reason')
-    if (waiting) {
-      state = waiting
-      cst = 'err'
-      reason = waiting
-    } else if (terminated) {
-      state = 'terminated: ' + terminated
-      if (terminated !== 'Completed') cst = 'err'
+  let lastRestart = 0
+  let mainReason = ''
+  let initReason = ''
+  let initBroken = false
+  /** @type {{ name: string, init: boolean, state: string, status: K8sStatus, restarts: number, last: string, image: string }[]} */
+  const containers = []
+  for (const [init, field] of /** @type {const} */ ([
+    [true, 'initContainerStatuses'],
+    [false, 'containerStatuses'],
+  ])) {
+    for (const cs of list(dig(p, 'status', field))) {
+      /** @type {K8sStatus} */
+      let cst = 'ok'
+      const r = num(cs, 'restartCount')
+      restarts += r
+      let state = 'running'
+      const waiting = str(cs, 'state', 'waiting', 'reason')
+      const terminated = str(cs, 'state', 'terminated', 'reason')
+      const exitCode = num(cs, 'state', 'terminated', 'exitCode')
+      if (waiting) {
+        state = waiting
+        cst = STARTING.has(waiting) ? 'warn' : 'err'
+        if (init) {
+          initReason = 'Init:' + waiting
+          initBroken ||= cst === 'err'
+        } else mainReason = waiting
+      } else if (terminated) {
+        const done = terminated === 'Completed' || exitCode === 0
+        state = done && init ? 'done' : 'terminated: ' + terminated
+        if (!done) {
+          cst = 'err'
+          if (init) {
+            initReason = 'Init:' + terminated
+            initBroken = true
+          }
+        }
+      } else if (init && dig(cs, 'state', 'running') !== undefined) {
+        cst = 'warn'
+        initReason ||= 'Init:Running'
+      }
+      if (!init && dig(cs, 'ready') !== true && cst === 'ok' && phase === 'Running') cst = 'warn'
+      const last = str(cs, 'lastState', 'terminated', 'reason')
+      const finished = Date.parse(str(cs, 'lastState', 'terminated', 'finishedAt'))
+      if (!Number.isNaN(finished) && finished > lastRestart) lastRestart = finished
+      if (last === 'OOMKilled') {
+        cst = 'err'
+        if (!init) mainReason = 'OOMKilled'
+      }
+      if (cst === 'err' || (cst === 'warn' && st === 'ok')) st = cst
+      containers.push({ name: str(cs, 'name'), init, state, status: cst, restarts: r, last, image: str(cs, 'image') })
     }
-    if (dig(cs, 'ready') !== true && cst === 'ok' && phase === 'Running') cst = 'warn'
-    const last = str(cs, 'lastState', 'terminated', 'reason')
-    if (last === 'OOMKilled') {
-      cst = 'err'
-      reason = 'OOMKilled'
-    }
-    if (cst === 'err' || (cst === 'warn' && st === 'ok')) st = cst
-    const det = [`Container ${cname} in pod ${ns}/${name}`, `image: ${str(cs, 'image')}`, `state: ${state}`, `restarts: ${r}`]
-    if (last) det.push(`last termination: ${last}`)
-    kids.push(mk('cluster', id, 'c:' + cname, { label: `${cname}  ${state}  r:${r}`, status: cst, kind: 'Container', ns, name: cname, pod: name, detail: det }))
   }
-  if (phase === 'Pending') st = 'warn'
+  if (phase === 'Pending' && st === 'ok') st = 'warn'
   if (phase === 'Failed' || phase === 'Unknown') st = 'err'
   if (phase === 'Succeeded') st = ''
-  let label = `pod/${name}  ${phase}`
-  if (reason) label += ' ' + reason
-  if (restarts > 0) label += ` r:${restarts}`
-  const containers = list(dig(p, 'spec', 'containers')).map(c => str(c, 'name'))
-  const pod = mk('cluster', parent, 'pod:' + name, {
-    label,
-    status: st,
-    kind: 'Pod',
-    ns,
-    name,
-    containers,
-    detail: [`Pod ${ns}/${name}`, `phase: ${phase}`, `node: ${str(p, 'spec', 'nodeName')}`, `restarts: ${restarts}`, ...conditions(p)],
+  // stuck in init: say why; past it, the main containers' reason
+  const reason = initBroken ? initReason : mainReason || initReason
+  const started = Date.parse(str(p, 'status', 'startTime'))
+  return { phase, st, reason, restarts, lastRestart, started: Number.isNaN(started) ? 0 : started, containers }
+}
+
+/** @param {unknown} p @param {string} ns @param {string} parent @param {number} now @returns {K8sNode[]} */
+function podNodes(p, ns, parent, now) {
+  const name = str(p, 'metadata', 'name')
+  const id = parent + '/pod:' + name
+  const hl = podHealth(p, now)
+  const kids = hl.containers.map(c => {
+    const det = [`${c.init ? 'Init container' : 'Container'} ${c.name} in pod ${ns}/${name}`, `image: ${c.image}`, `state: ${c.state}`, `restarts: ${c.restarts}`]
+    if (c.last) det.push(`last termination: ${c.last}`)
+    return mk('cluster', id, 'c:' + c.name, { label: `${c.init ? 'init:' : ''}${c.name}  ${c.state}  r:${c.restarts}`, status: c.status, kind: 'Container', ns, name: c.name, pod: name, detail: det })
   })
+  let label = `pod/${name}  ${hl.phase}`
+  if (hl.reason) label += ' ' + hl.reason
+  if (hl.restarts > 0) label += ` r:${hl.restarts}` + (hl.lastRestart ? ` (last ${ago(hl.lastRestart, now)} ago)` : '')
+  if (hl.started) label += `  age ${ago(hl.started, now)}`
+  const containers = list(dig(p, 'spec', 'containers')).map(c => str(c, 'name'))
+  const detail = [`Pod ${ns}/${name}`, `phase: ${hl.phase}`, `node: ${str(p, 'spec', 'nodeName')}`, `restarts: ${hl.restarts}`]
+  if (hl.lastRestart) detail.push(`last restart: ${ago(hl.lastRestart, now)} ago`)
+  if (hl.started) detail.push(`started: ${ago(hl.started, now)} ago`)
+  const owner = ownerOf(p)
+  if (owner) detail.push(`owner: ${owner.kind}/${owner.name}`)
+  const pod = mk('cluster', parent, 'pod:' + name, { label, status: hl.st, kind: 'Pod', ns, name, containers, detail: [...detail, ...conditions(p)] })
   return [pod, ...kids]
+}
+
+/**
+ * The workload a pod belongs to, from its controller ownerReference: a
+ * ReplicaSet named <deployment>-<pod-template-hash> stands for its Deployment.
+ * @param {unknown} p @returns {{ kind: string, name: string } | null}
+ */
+function ownerOf(p) {
+  const refs = list(dig(p, 'metadata', 'ownerReferences'))
+  const ref = refs.find(r => dig(r, 'controller') === true) ?? refs[0]
+  if (!ref) return null
+  const kind = str(ref, 'kind')
+  const name = str(ref, 'name')
+  if (kind === 'ReplicaSet') {
+    const hash = str(p, 'metadata', 'labels', 'pod-template-hash')
+    if (hash && name.endsWith('-' + hash)) return { kind: 'Deployment', name: name.slice(0, -hash.length - 1) }
+  }
+  return { kind, name }
 }
 
 /** @param {Engine} $ @param {string} ctx @param {K8sNode} nsNode @returns {Promise<K8sNode[]>} */
@@ -302,10 +410,12 @@ async function loadWorkloads($, ctx, nsNode) {
     callJSON($, 'k8s_get', { kind: 'deployments,statefulsets,daemonsets', namespace: ns, context: ctx }),
     callJSON($, 'k8s_get', { kind: 'pods', namespace: ns, context: ctx }),
   ])
-  const pods = list(dig(p, 'items')).map(raw => ({ raw, labels: strMap(dig(raw, 'metadata', 'labels')), used: false }))
+  const now = Date.now()
+  const pods = list(dig(p, 'items')).map(raw => ({ raw, labels: strMap(dig(raw, 'metadata', 'labels')), owner: ownerOf(raw), used: false }))
   /** @type {K8sNode[]} */
   const out = []
-  for (const it of list(dig(w, 'items'))) {
+  const workloads = list(dig(w, 'items'))
+  for (const it of workloads) {
     const kind = str(it, 'kind')
     const name = str(it, 'metadata', 'name')
     const want = kind === 'DaemonSet' ? num(it, 'status', 'desiredNumberScheduled') : num(it, 'spec', 'replicas')
@@ -322,17 +432,51 @@ async function loadWorkloads($, ctx, nsNode) {
       detail: [`${kind} ${ns}/${name}`, `ready: ${ready}/${want}`, ...images, ...conditions(it)],
     })
     out.push(wn)
-    const sel = strMap(dig(it, 'spec', 'selector', 'matchLabels'))
-    const keys = Object.keys(sel)
-    if (keys.length === 0) continue
+    // exact: pods whose controller is this workload
     for (const pi of pods) {
-      if (!pi.used && keys.every(k => pi.labels[k] === sel[k])) {
+      if (!pi.used && pi.owner && pi.owner.kind === kind && pi.owner.name === name) {
         pi.used = true
-        out.push(...podNodes(pi.raw, ns, wn.id))
+        out.push(...podNodes(pi.raw, ns, wn.id, now))
       }
     }
   }
-  for (const pi of pods) if (!pi.used) out.push(...podNodes(pi.raw, ns, nsNode.id))
+  // fallback, for pods with no ownerReferences: the workload's matchLabels
+  for (const it of workloads) {
+    const sel = strMap(dig(it, 'spec', 'selector', 'matchLabels'))
+    const keys = Object.keys(sel)
+    if (keys.length === 0) continue
+    const wid = `${nsNode.id}/${str(it, 'kind')}:${str(it, 'metadata', 'name')}`
+    for (const pi of pods) {
+      if (!pi.used && !pi.owner && keys.every(k => pi.labels[k] === sel[k])) {
+        pi.used = true
+        out.push(...podNodes(pi.raw, ns, wid, now))
+      }
+    }
+  }
+  // pods of Jobs (and so of CronJobs), grouped under their Job
+  /** @type {Map<string, typeof pods>} */
+  const jobs = new Map()
+  for (const pi of pods) {
+    if (pi.used || pi.owner?.kind !== 'Job') continue
+    pi.used = true
+    jobs.set(pi.owner.name, [...(jobs.get(pi.owner.name) ?? []), pi])
+  }
+  for (const [name, members] of [...jobs].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const states = members.map(pi => podHealth(pi.raw, now))
+    const done = states.filter(s => s.phase === 'Succeeded').length
+    /** @type {K8sStatus} */
+    const st = states.some(s => s.st === 'err') ? 'err' : states.some(s => s.st === 'warn') ? 'warn' : done === members.length ? '' : 'ok'
+    const jn = mk('cluster', nsNode.id, 'Job:' + name, {
+      label: `job/${name}  ${done}/${members.length} succeeded`,
+      status: st,
+      kind: 'Job',
+      ns,
+      name,
+      detail: [`Job ${ns}/${name}`, `pods: ${members.length}, succeeded: ${done}`],
+    })
+    out.push(jn, ...members.flatMap(pi => podNodes(pi.raw, ns, jn.id, now)))
+  }
+  for (const pi of pods) if (!pi.used) out.push(...podNodes(pi.raw, ns, nsNode.id, now))
   if (out.length === 0) out.push(mk('cluster', nsNode.id, 'empty', { label: '(empty)' }))
   return out
 }
@@ -499,8 +643,8 @@ async function loadLock($, ctx) {
   return out
 }
 
-/** @param {Engine} $ @param {K8sTab} tab @param {string} ctx @returns {Promise<K8sNode[]>} */
-function loadRoots($, tab, ctx) {
+/** @param {Engine} $ @param {K8sTab} tab @param {string} ctx @param {boolean} [quiet] @returns {Promise<K8sNode[]>} */
+function loadRoots($, tab, ctx, quiet = false) {
   switch (tab) {
     case 'argo':
       return loadApps($, ctx)
@@ -509,7 +653,7 @@ function loadRoots($, tab, ctx) {
     case 'lock':
       return loadLock($, ctx)
     default:
-      return loadNamespaces($, ctx)
+      return loadNamespaces($, ctx, quiet)
   }
 }
 
@@ -573,13 +717,38 @@ async function syncStatus($) {
   if (v.context) $.ui.status(`k8s ${v.context} [${tierOf(d, v.context)}] ${lockText(d, v.context)}`)
 }
 
+/**
+ * After a refresh: a selected row that is gone (a pod replaced in a rollout)
+ * gives way to its nearest ancestor still there, its workload say, and the
+ * pane says so.
+ * @param {Engine} $
+ */
+async function keepSelection($) {
+  const d = await read($, data)
+  const v = await read($, view)
+  const sel = v.selected
+  if (!sel || d.nodes[sel]) return
+  let up = sel
+  while (up.includes('/') && !d.nodes[up]) up = up.slice(0, up.lastIndexOf('/'))
+  const next = d.nodes[up] ? up : null
+  // gone for real only where its parent's rows were reloaded without it;
+  // else its parent was just not reloaded (collapsed), and that says nothing
+  const parent = sel.slice(0, sel.lastIndexOf('/'))
+  const vanished = d.children[parent] !== undefined
+  const gone = sel.slice(sel.lastIndexOf('/') + 1).replace(':', '/')
+  const where = next ? crumb(d.nodes[next]) : 'the top level'
+  await update($, view, w =>
+    w.selected !== sel ? w : { ...w, selected: next, unlock: null, ...(vanished ? { notice: { text: `${gone} is gone (replaced or deleted); showing ${where}.`, isError: false } } : {}) },
+  )
+}
+
 /** Loads the visible tab's top level, then every expanded lazy node under it. @param {Engine} $ @param {boolean} quiet */
 async function refreshTab($, quiet) {
   const { tab, context: ctx } = await read($, view)
   if (!ctx) return
   await busy($, quiet, async () => {
     try {
-      const roots = await loadRoots($, tab, ctx)
+      const roots = await loadRoots($, tab, ctx, quiet)
       if ((await read($, view)).context !== ctx) return
       await update($, data, d => ({ ...replaceUnder(d, tab, roots), loadedFor: ctx }))
     } catch (err) {
@@ -590,6 +759,7 @@ async function refreshTab($, quiet) {
     const d = await read($, data)
     const lazy = v.expanded.map(id => d.nodes[id]).filter(n => n && n.tab === tab && n.lazy)
     await Promise.all(lazy.map(n => loadKids($, ctx, n)))
+    await keepSelection($)
   })
   await noticeProblems($, ctx)
   if (tab === 'lock') await syncStatus($)
@@ -1214,7 +1384,8 @@ function crumb(n) {
  *   | { type: 'more', parent: string, depth: number, left: number }
  *   | { type: 'less', parent: string, depth: number, left: number }
  *   | { type: 'error', parent: string, text: string, depth: number }
- *   | { type: 'loading', depth: number }} Row
+ *   | { type: 'loading', depth: number }
+ *   | { type: 'none', depth: number, text: string }} Row
  */
 
 /** @param {K8sData} d @param {K8sView} v @returns {Row[]} */
@@ -1225,9 +1396,17 @@ function rowsOf(d, v) {
   const walk = (parent, depth) => {
     const err = d.errors[parent]
     if (err) rows.push({ type: 'error', parent, text: err, depth })
-    const kids = d.children[parent]
+    let kids = d.children[parent]
     if (!kids) {
       if (!err) rows.push({ type: 'loading', depth })
+      return
+    }
+    // the filter narrows the top level; problems only hides ✔ rows everywhere
+    const needle = (v.filter ?? '').trim().toLowerCase()
+    if (depth === 0 && needle) kids = kids.filter(id => d.nodes[id]?.label.toLowerCase().includes(needle))
+    if (v.problemsOnly) kids = kids.filter(id => d.nodes[id] && (d.nodes[id].status === 'err' || d.nodes[id].status === 'warn'))
+    if (kids.length === 0 && depth === 0 && (needle || v.problemsOnly)) {
+      rows.push({ type: 'none', depth, text: v.problemsOnly && !needle ? 'no problems here ✔' : 'nothing matches' })
       return
     }
     const limit = v.pages[parent] ?? PAGE
@@ -1264,9 +1443,10 @@ async function draw($, e) {
   const look = lookOf(v)
 
   if (e.props.placement === 'widget') {
+    // a namespace counts its pods; any other row counts itself
     const all = (d.children[v.tab] ?? []).map(id => d.nodes[id]).filter(Boolean)
-    const errs = all.filter(n => n.status === 'err').length
-    const warns = all.filter(n => n.status === 'warn').length
+    const errs = all.reduce((s, n) => s + (n.counts ? n.counts.err : n.status === 'err' ? 1 : 0), 0)
+    const warns = all.reduce((s, n) => s + (n.counts ? n.counts.warn : n.status === 'warn' ? 1 : 0), 0)
     return asElement(
       h(
         Box,
@@ -1315,6 +1495,24 @@ async function draw($, e) {
   )
   if (d.errors.top) out.push(h(Text, { color: 'error' }, '✖ ' + d.errors.top))
 
+  // filter and problems only
+  out.push(
+    h(
+      Box,
+      { flexDirection: 'row', flexWrap: 'wrap', columnGap: 2 },
+      h(Input, {
+        key: 'filter',
+        placeholder: 'filter…',
+        value: v.filter ?? '',
+        submitLabel: 'filter',
+        onInput: (/** @type {string} */ text) => update($, view, w => ({ ...w, filter: text })),
+        onSubmit: (/** @type {string} */ text) => update($, view, w => ({ ...w, filter: text })),
+      }),
+      h(Button, { key: 'problems', label: v.problemsOnly ? '⚠ problems only' : '⚠ all rows', plain: true, dimColor: !v.problemsOnly, onPress: () => update($, view, w => ({ ...w, problemsOnly: !w.problemsOnly })) }),
+      v.filter ? h(Button, { key: 'filter-clear', label: '✕', plain: true, onPress: () => update($, view, w => ({ ...w, filter: '' })) }) : null,
+    ),
+  )
+
   // 3. breadcrumb
   const chain = []
   for (let n = sel; n; n = d.nodes[n.parent]) chain.unshift(n)
@@ -1331,12 +1529,53 @@ async function draw($, e) {
   })
   out.push(h(Box, { flexDirection: 'row', flexWrap: 'wrap' }, ...crumbs))
 
-  // 4. tree
+  // 4. actions, right under the breadcrumb: in reach however long the tree
+  // or the detail below gets
+  /** @type {unknown[]} */
+  const acts = []
+  const c = ctx ?? ''
+  if (sel && ctx) {
+    if (isPodish(sel)) {
+      acts.push(
+        h(Button, { key: 'act:logs', label: 'Logs', onPress: () => logs($, c, sel, false) }),
+        h(Button, { key: 'act:prev', label: 'Prev logs', onPress: () => logs($, c, sel, true) }),
+      )
+    }
+    if (isPodish(sel) || isObject(sel)) {
+      acts.push(
+        h(Button, { key: 'act:events', label: 'Events', onPress: () => events($, c, sel) }),
+        h(Button, { key: 'act:describe', label: 'Describe', onPress: () => describe($, c, sel) }),
+      )
+    }
+  }
+  acts.push(
+    h(Button, { key: 'act:ask', label: 'Ask Claude', variant: 'primary', onPress: () => askClaude($) }),
+    h(Button, { key: 'act:back', label: '← Back', onPress: () => goBack($) }),
+    h(Button, { key: 'act:top', label: '⌂ Top', onPress: () => goTop($) }),
+    h(Button, { key: 'act:refresh', label: '⟳ Refresh', onPress: () => refreshAll($, false) }),
+  )
+  if (sel && ctx && unlockActions(sel).length > 0) acts.push(h(Button, { key: 'act:unlock', label: 'Unlock…', onPress: () => openUnlock($, sel) }))
+  out.push(h(Box, { flexDirection: 'row', flexWrap: 'wrap', columnGap: 1 }, ...acts))
+
+  // 5. tree; while a detail or the unlock is open, only the rows around the
+  // selection, so the detail stays near the top
+  let rows = rowsOf(d, v)
+  const unlockOpen = Boolean(v.unlock && sel && v.unlock.nodeId === sel.id)
   /** @type {unknown[]} */
   const tree = []
-  for (const r of rowsOf(d, v)) {
+  if ((v.detail || unlockOpen) && rows.length > TREE_WHILE_DETAIL) {
+    const at = Math.max(0, rows.findIndex(r => r.type === 'node' && r.node.id === v.selected))
+    const start = Math.max(0, Math.min(at - 3, rows.length - TREE_WHILE_DETAIL))
+    const above = start
+    const below = rows.length - start - TREE_WHILE_DETAIL
+    rows = rows.slice(start, start + TREE_WHILE_DETAIL)
+    if (above > 0) tree.push(h(Text, { dimColor: true }, `  ⋮ ${above} rows above`))
+    if (below > 0) rows.push({ type: 'none', depth: 0, text: `⋮ ${below} rows below (✕ close the detail to see them all)` })
+  }
+  for (const r of rows) {
     const pad = '  '.repeat(r.depth)
     if (r.type === 'loading') tree.push(h(Text, { dimColor: true }, pad + '  loading…'))
+    else if (r.type === 'none') tree.push(h(Text, { dimColor: true }, pad + '  ' + r.text))
     else if (r.type === 'error') tree.push(h(Text, { color: 'error' }, pad + '  ✖ ' + cut(r.text, Math.max(20, cols * 3))))
     else if (r.type === 'more')
       tree.push(
@@ -1375,7 +1614,7 @@ async function draw($, e) {
   }
   out.push(h(Box, { flexDirection: 'column', marginTop: 1 }, ...tree))
 
-  // 5. detail
+  // 6. detail
   out.push(h(Text, { dimColor: true }, '─'.repeat(Math.min(cols, 120))))
   if (v.unlock && sel && v.unlock.nodeId === sel.id && ctx) {
     const u = v.unlock
@@ -1421,33 +1660,6 @@ async function draw($, e) {
 
   // notices
   if (v.notice) out.push(h(Text, { color: v.notice.isError ? 'error' : 'success', wrap: 'wrap' }, v.notice.text))
-
-  // 6. action row
-  /** @type {unknown[]} */
-  const acts = []
-  const c = ctx ?? ''
-  if (sel && ctx) {
-    if (isPodish(sel)) {
-      acts.push(
-        h(Button, { key: 'act:logs', label: 'Logs', onPress: () => logs($, c, sel, false) }),
-        h(Button, { key: 'act:prev', label: 'Prev logs', onPress: () => logs($, c, sel, true) }),
-      )
-    }
-    if (isPodish(sel) || isObject(sel)) {
-      acts.push(
-        h(Button, { key: 'act:events', label: 'Events', onPress: () => events($, c, sel) }),
-        h(Button, { key: 'act:describe', label: 'Describe', onPress: () => describe($, c, sel) }),
-      )
-    }
-  }
-  acts.push(
-    h(Button, { key: 'act:ask', label: 'Ask Claude', variant: 'primary', onPress: () => askClaude($) }),
-    h(Button, { key: 'act:back', label: '← Back', onPress: () => goBack($) }),
-    h(Button, { key: 'act:top', label: '⌂ Top', onPress: () => goTop($) }),
-    h(Button, { key: 'act:refresh', label: '⟳ Refresh', onPress: () => refreshAll($, false) }),
-  )
-  if (sel && ctx && unlockActions(sel).length > 0) acts.push(h(Button, { key: 'act:unlock', label: 'Unlock…', onPress: () => openUnlock($, sel) }))
-  out.push(h(Box, { flexDirection: 'row', flexWrap: 'wrap', columnGap: 1, marginTop: 1 }, ...acts))
 
   // The backdrop (Steve or the ∞): placed first, so everything after paints
   // over it and it shows only in the cells the pane leaves blank.
