@@ -1,0 +1,15 @@
+# Fake key-shaped values in tests (not real credentials).
+# redact_test.go feeds them in to check they are masked; validate_test.go
+# checks that a hardcoded Terraform token fails validation.
+
+# History scans (gitleaks git, CI)
+f56e8760cccc57ed90e2c26d4c55f46b29a8e54c:internal/validate/validate_test.go:generic-api-key:78
+29f14a7081468fa54d139e5f013de8241cdfab9c:internal/redact/redact_test.go:jwt:11
+29f14a7081468fa54d139e5f013de8241cdfab9c:internal/redact/redact_test.go:aws-access-token:10
+29f14a7081468fa54d139e5f013de8241cdfab9c:internal/redact/redact_test.go:aws-access-token:19
+
+# Working-tree scans (gitleaks dir)
+internal/validate/validate_test.go:generic-api-key:78
+internal/redact/redact_test.go:jwt:12
+internal/redact/redact_test.go:aws-access-token:11
+internal/redact/redact_test.go:aws-access-token:20
