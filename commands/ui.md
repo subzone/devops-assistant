@@ -1,9 +1,11 @@
 ---
-description: Show the k8s TUI as a right-side pane next to this chat (iTerm2, tmux, WezTerm, kitty)
-allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/bin/k8sh-launch tui --open)
+description: Open the k8s pane beside this chat (same as /k8s)
 ---
 
-Run `"${CLAUDE_PLUGIN_ROOT}/bin/k8sh-launch" tui --open` and show its output verbatim.
+The k8s pane is a Claude Code mod in this plugin: `/k8s` opens and closes it, and the mod answers `/k8s-handler:ui` itself. If you are reading this, the mod did not answer, so this Claude Code is not loading the plugin's hooks module.
 
-- If it opened a pane: say in one line that the cluster view is on the right and the chat stays here. `f` there sends the selection to `/k8s-handler:explain`.
-- If it failed: show the error and the `detected:` line, then give the one fix it suggests (for example the macOS Automation permission). Don't suggest opening a new window.
+Tell the user, in two or three lines:
+- Type `/k8s`. If it isn't listed, update Claude Code and restart the session so the k8s-handler mod loads (`claude --debug` names the reason when a mod doesn't load).
+- Until then the standalone TUI works in their own terminal: `k8sh tui`, or `k8sh workspace --continue` for chat and TUI side by side in tmux.
+
+Run nothing yourself.

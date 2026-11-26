@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Locates or builds the k8sh binary, then execs it.
-# Order: plugin bin/k8sh-<os>-<arch>, plugin bin/k8sh, k8sh on PATH, build with Go.
+# Order: plugin bin/k8sh-<os>-<arch> (release), then in a source checkout with Go
+# bin/k8sh built from this source (rebuilt when a .go file is newer), then plugin
+# bin/k8sh, then k8sh on PATH. A checkout prefers its own source over PATH, which
+# may hold another installed version of this plugin's binary.
 # If no binary can be found in hook mode, fail CLOSED for k8s-related commands.
 set -euo pipefail
 
@@ -8,14 +11,24 @@ ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"; case "$ARCH" in x86_64) ARCH=amd64;; aarch64|arm64) ARCH=arm64;; esac
 
+build() {
+  (cd "$ROOT" && CGO_ENABLED=0 go build -trimpath -o "$ROOT/bin/k8sh" ./cmd/k8sh) >&2
+}
+
+stale() {
+  [ ! -x "$ROOT/bin/k8sh" ] && return 0
+  [ -n "$(find "$ROOT/cmd" "$ROOT/internal" "$ROOT/go.mod" -newer "$ROOT/bin/k8sh" \( -name '*.go' -o -name go.mod \) 2>/dev/null | head -n 1)" ]
+}
+
 find_bin() {
-  for c in "$ROOT/bin/k8sh-$OS-$ARCH" "$ROOT/bin/k8sh"; do
-    [ -x "$c" ] && { echo "$c"; return 0; }
-  done
-  command -v k8sh 2>/dev/null && return 0
-  if command -v go >/dev/null 2>&1 && [ -f "$ROOT/go.mod" ]; then
-    (cd "$ROOT" && CGO_ENABLED=0 go build -trimpath -o "$ROOT/bin/k8sh" ./cmd/k8sh) >&2 && { echo "$ROOT/bin/k8sh"; return 0; }
+  [ -x "$ROOT/bin/k8sh-$OS-$ARCH" ] && { echo "$ROOT/bin/k8sh-$OS-$ARCH"; return 0; }
+  if [ -f "$ROOT/go.mod" ] && command -v go >/dev/null 2>&1; then
+    if ! stale || build; then
+      [ -x "$ROOT/bin/k8sh" ] && { echo "$ROOT/bin/k8sh"; return 0; }
+    fi
   fi
+  [ -x "$ROOT/bin/k8sh" ] && { echo "$ROOT/bin/k8sh"; return 0; }
+  command -v k8sh 2>/dev/null && return 0
   return 1
 }
 

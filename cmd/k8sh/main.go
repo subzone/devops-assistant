@@ -27,7 +27,7 @@ import (
 	"github.com/subzone/k8s-handler/internal/validate"
 )
 
-var version = "0.3.1"
+var version = "0.4.0"
 
 const usage = `k8sh — GitOps-first Kubernetes operations with a destructive-action lock
 
@@ -36,6 +36,11 @@ Usage:
   k8sh hook pretooluse             Claude Code PreToolUse hook (reads JSON on stdin)
   k8sh unlock --context C --action A --target kind/name [--namespace N] [--ttl 10m]
                                    USER ONLY: issue a single-use grant (interactive terminal)
+  k8sh grant-from-ui --context C --action A --target kind/name [--namespace N] --confirm TYPED
+                                   k8s pane only: issue a grant the user confirmed in the pane
+                                   (UI token on stdin; delete for pods/daemonsets, delete or
+                                   scale-zero for deployments/statefulsets)
+  k8sh ui-init                     create the k8s pane's UI token if missing; prints its path
   k8sh lock                        revoke all grants
   k8sh grants                      list active grants
   k8sh actions                     list actions that require a grant
@@ -78,6 +83,12 @@ func main() {
 		os.Exit(hookPreToolUse(home, os.Stdin, os.Stdout))
 	case "unlock":
 		unlock(ctx, home, cfg, os.Args[2:])
+	case "grant-from-ui":
+		os.Exit(grantFromUI(home, cfg, os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+	case "ui-init":
+		p, err := grant.EnsureUIToken(home)
+		must(err)
+		fmt.Println(p)
 	case "lock":
 		n, err := grant.NewStore(home).RevokeAll()
 		must(err)
@@ -189,6 +200,54 @@ func unlock(ctx context.Context, home string, cfg *config.Config, args []string)
 	}
 	audit.Write(home, audit.Record{Source: "cli", Event: "unlock", Outcome: "granted", Detail: map[string]any{"grant": g.ID, "context": g.Context, "namespace": g.Namespace, "action": g.Action, "target": g.Target, "expires": g.ExpiresAt}})
 	fmt.Fprintf(tty, "\n  🔓 granted %s — single use, expires %s\n", g.ID, g.ExpiresAt.Local().Format("15:04:05"))
+}
+
+// grantFromUI issues a grant the user confirmed in the k8s pane. The pane
+// (a Claude Code mod, run by the host process, not by any agent tool) sends
+// the UI token on stdin and the text the user typed as --confirm. The same
+// rules as `k8sh unlock` apply: exact scope, single use, TTL ceiling, audit.
+// Bash access is blocked by the guard (`k8sh … grant`), ~/.k8sh by the guard
+// and the hook, and the MCP server's environment (K8SH_AGENT) is refused.
+func grantFromUI(home string, cfg *config.Config, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("grant-from-ui", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	c := fs.String("context", "", "kube context (required)")
+	ns := fs.String("namespace", "", "namespace")
+	action := fs.String("action", "", "delete | scale-zero")
+	target := fs.String("target", "", "kind/name")
+	confirm := fs.String("confirm", "", "what the user typed in the pane")
+	ttl := fs.Duration("ttl", 10*time.Minute, "lifetime (max 15m)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	detail := map[string]any{"context": *c, "namespace": *ns, "action": *action, "target": *target}
+	refuse := func(reason string) int {
+		detail["reason"] = reason
+		audit.Write(home, audit.Record{Source: "ui", Event: "unlock", Outcome: "refused", Detail: detail})
+		fmt.Fprintln(stderr, "k8sh:", reason)
+		return 1
+	}
+	if os.Getenv("K8SH_AGENT") != "" {
+		return refuse("refusing to issue a grant from the agent's MCP environment")
+	}
+	tok, _ := io.ReadAll(io.LimitReader(stdin, 256))
+	if err := grant.CheckUIToken(home, string(tok)); err != nil {
+		return refuse(err.Error())
+	}
+	if err := grant.UIActionAllowed(*action, *target); err != nil {
+		return refuse(err.Error())
+	}
+	g, err := grant.NewStore(home).IssueConfirmed(grant.Request{Context: *c, Namespace: *ns, Action: *action, Target: *target, TTL: *ttl, Tier: string(cfg.TierOf(*c))},
+		*confirm, time.Duration(cfg.MaxTTLMinutes())*time.Minute)
+	if err != nil {
+		return refuse(err.Error())
+	}
+	if err := grant.RotateUIToken(home); err != nil {
+		fmt.Fprintln(stderr, "k8sh: warning: could not rotate the UI token:", err)
+	}
+	audit.Write(home, audit.Record{Source: "ui", Event: "unlock", Outcome: "granted", Detail: map[string]any{"grant": g.ID, "context": g.Context, "namespace": g.Namespace, "action": g.Action, "target": g.Target, "expires": g.ExpiresAt}})
+	json.NewEncoder(stdout).Encode(map[string]any{"id": g.ID, "context": g.Context, "namespace": g.Namespace, "action": g.Action, "target": g.Target, "expiresAt": g.ExpiresAt, "tier": cfg.TierOf(*c)})
+	return 0
 }
 
 func runValidate(ctx context.Context, args []string) {

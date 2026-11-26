@@ -138,17 +138,15 @@ type Request struct {
 	Tier                               string
 }
 
-// Issue asks the user to type the context name on the terminal, then writes
-// a signed single-use grant.
-func (s *Store) Issue(req Request, tty Terminal, maxTTL time.Duration) (*Grant, error) {
+func (req *Request) normalize(maxTTL time.Duration) error {
 	if _, ok := Actions[req.Action]; !ok {
-		return nil, fmt.Errorf("unknown action %q", req.Action)
+		return fmt.Errorf("unknown action %q", req.Action)
 	}
 	if req.Context == "" || req.Target == "" {
-		return nil, errors.New("context and target are required")
+		return errors.New("context and target are required")
 	}
 	if strings.ContainsAny(req.Target, "*?") {
-		return nil, errors.New("wildcard targets are not allowed")
+		return errors.New("wildcard targets are not allowed")
 	}
 	if req.TTL <= 0 {
 		req.TTL = 10 * time.Minute
@@ -156,13 +154,32 @@ func (s *Store) Issue(req Request, tty Terminal, maxTTL time.Duration) (*Grant, 
 	if req.TTL > maxTTL {
 		req.TTL = maxTTL
 	}
+	return nil
+}
+
+// Issue asks the user to type the context name on the terminal, then writes
+// a signed single-use grant.
+func (s *Store) Issue(req Request, tty Terminal, maxTTL time.Duration) (*Grant, error) {
+	if err := req.normalize(maxTTL); err != nil {
+		return nil, err
+	}
 	fmt.Fprintf(tty, "\n  DESTRUCTIVE ACTION GRANT\n  context:   %s (tier: %s)\n  namespace: %s\n  action:    %s — %s\n  target:    %s\n  valid for: %s, single use\n\n  Type the context name to confirm: ",
 		req.Context, req.Tier, orDash(req.Namespace), req.Action, Actions[req.Action], req.Target, req.TTL)
 	line, err := bufio.NewReader(tty).ReadString('\n')
 	if err != nil && line == "" {
 		return nil, errors.New("no confirmation received")
 	}
-	if strings.TrimSpace(line) != req.Context {
+	return s.IssueConfirmed(req, strings.TrimSpace(line), maxTTL)
+}
+
+// IssueConfirmed writes a signed single-use grant when typed equals the
+// context name exactly. The caller is responsible for having collected typed
+// from the user (the terminal prompt in Issue, or the k8s pane's Input).
+func (s *Store) IssueConfirmed(req Request, typed string, maxTTL time.Duration) (*Grant, error) {
+	if err := req.normalize(maxTTL); err != nil {
+		return nil, err
+	}
+	if typed != req.Context {
 		return nil, errors.New("confirmation did not match; nothing unlocked")
 	}
 	idb := make([]byte, 8)

@@ -79,6 +79,7 @@ var bashRules = []rule{
 	// --- grant store / lock bypass ---
 	r(b+`k8sh(-launch)?\b[^;&|]*\s(unlock|grant)\b`, "unlocking is user-only: run it yourself in a separate terminal"),
 	r(`\.k8sh/`, "the k8sh state directory (grants, audit log) is off-limits"),
+	r(`\bui\.token\b`, "the k8s pane's UI token is off-limits"),
 	r(b+`(script|expect|unbuffer|socat)\b`, "pseudo-terminal tools are blocked (lock bypass risk)"),
 	r(`\bpty\.spawn\b|\bpexpect\b|\bopenpty\b`, "pseudo-terminal spawning is blocked (lock bypass risk)"),
 	r(b+`tmux\b[^;&|]*\s(send-keys|send|paste-buffer|set-buffer|load-buffer|pipe-pane)\b`, "typing into terminal panes is blocked (lock bypass risk)"),
@@ -90,7 +91,7 @@ var bashRules = []rule{
 // credential locations. Matched against commands and file paths.
 var credPaths = []string{
 	".kube/", ".kube\\", ".aws/", ".azure/", ".config/gcloud", ".docker/config.json",
-	".ssh/", ".gnupg/", ".netrc", ".git-credentials", ".vault-token", ".k8sh/",
+	".ssh/", ".gnupg/", ".netrc", ".git-credentials", ".vault-token", ".k8sh/", "/ui.token",
 	".config/hcloud", ".config/doctl", ".aliyun/", ".terraform.d/credentials", ".terraformrc", ".pulumi/credentials",
 	".infracost/", ".oci/", "application_default_credentials.json",
 }

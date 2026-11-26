@@ -36,40 +36,40 @@ AWS, Azure, GCP, Hetzner, DigitalOcean, Alibaba Cloud:
 - Ops: read-only logs, inventory and costs through each cloud's CLI (`cloud-ops` skill)
 - Guard: cloud CLIs are read-only for Claude; `terraform/tofu apply|destroy|import|state …`, `pulumi up`, mutating `aws/az/gcloud/hcloud/doctl/aliyun` calls and token-printing commands are blocked; cloud credential files are unreadable
 
-## TUI
+## k8s pane
 
-Claude chat on the left, k8s view on the right, in any terminal (Apple Terminal included):
-```bash
-brew install tmux          # once
-k8sh workspace --continue  # tmux session "k8s": claude | k8sh tui  (args go to claude)
+Type `/k8s` and the cluster view opens on the right side of the chat, inside the same Claude Code session. You don't need tmux, a second window or a separate process. It works in any terminal, Apple Terminal included, and in the Code tab of the Claude desktop app. `/k8s` again (or Esc while the pane has focus) closes it. `/k8s-handler:ui` opens the same pane.
 ```
-Already in tmux, iTerm2, WezTerm or kitty? `/k8s-handler:ui` splits the current window. Standalone: `k8sh tui`.
-Looks like a plain window: no status bar, mouse on, thin divider, its own tmux server and config (yours is untouched). Click or Alt+←/→ to switch panes. Quitting Claude closes the workspace; Ctrl-b d detaches and `k8sh workspace` re-attaches.
+ 1: Cluster  2: Argo CD  3: RCA  4: Lock               │  ...chat...
+ context k3d-mycluster [dev] ▾   LOCKED                │
+ ⌂ Cluster › payments › deploy/api › pod/api-2         │
+ ▾ ✔ payments                                          │
+   ▾ ⚠ deploy/api  1/2                                 │
+     ▸ ✔ pod/api-1  Running                            │
+     ▸ ✖ pod/api-2  Running OOMKilled r:7              │
+ ───────────────────────────────────────               │
+ Pod payments/api-2  phase: Running  restarts: 7       │
+ [ Logs ] [ Prev logs ] [ Events ] [ Describe ]        │
+ [ Ask Claude ] [ ← Back ] [ ⌂ Top ] [ ⟳ Refresh ]     │
+ [ Unlock… ]                                           │
 ```
- k8sh   1 Cluster  2 Argo CD  3 RCA  4 Lock                          k3d-mycluster [dev] LOCKED
-─────────────────────────────────────────────┬────────────────────────────────────────────────
-▸ ✔ default                                  │ Pod payments/api-1
-▾ ✔ payments                                 │ phase: Running
-  ▾ ⚠ deploy/api  1/2                        │ node: n1
-    ▸ ✖ pod/api-1  Running OOMKilled r:6     │ restarts: 6
-    ▸ ✔ pod/api-2  Running                   │
-──────────────────────────────────────────────────────────────────────────────────────────────
- ⏎ expand  e events  l logs  f →Claude  u unlock  c ctx  r refresh  ? help  q quit
-```
-- Clickable menus: `≡ k8sh` main menu, context dropdown (click the context name), action menu on any item (right-click, `m`, or Enter on a leaf: logs, previous logs, events, describe, send to Claude, unlock delete / scale to 0), and a button bar in the footer.
-- Mouse: click to select, click again or click the arrow to expand; wheel scrolls; click tabs.
-- Back: `esc`/`backspace` closes logs/events, collapses, then goes up a level; `0` collapses all and jumps to the top; the breadcrumb (`⌂ Cluster › payments › api › api-1`) is clickable; clicking the active tab also collapses all.
-- `f` sends the selection to Claude, then ask `/k8s-handler:explain`.
-- `u` issues a single-use grant for the selected pod/workload after you type the context name. It works only in your own terminal, never inside Claude.
-- Views: Cluster (namespaces → workloads → pods → containers), Argo CD (apps → resources), RCA (ranked findings + warnings), Lock (grants, tiers).
-- All output redacted. Native Windows: use WSL.
+- Tabs (hotkeys 1-4): Cluster (namespaces → workloads → pods → containers), Argo CD (apps → resources, problems first), RCA (ranked findings + recent warnings), Lock (lock state, active grants with expiry, contexts and tiers).
+- Click a row to select it; click it again to expand or collapse it. The breadcrumb jumps back to any level; `⌂` collapses everything. Long lists show 30 rows with `more…`.
+- Logs, previous logs, events and describe open in the detail area (`✕ close` returns to the summary). **Ask Claude** sends a short, redacted description of the selection and the last output to the chat, and Claude diagnoses it with the `rca-runbook` skill.
+- The status line shows `k8s <context> [<tier>] LOCKED` (or `UNLOCKED xN`). The pane refreshes on open, on ⟳, on tab or context change, every 15 s while open, and after Claude uses a k8sh tool.
+- **Unlock…** on a pod or workload asks you to type the context name, then issues one grant: delete for pods and daemonsets, delete or scale to 0 for deployments and statefulsets. It is single use, for that exact target, expires within 15 minutes and is audited. Only you can press it: Claude has no tool, command or prompt that reaches it.
+- Everything shown comes from the k8sh MCP tools, so it is redacted. The pane never reads kubeconfig. Switching the pane's context doesn't change kubectl's current context.
+- The right-side dock needs Claude Code's fullscreen layout and a wide enough terminal. Otherwise the pane opens above the prompt, which is normal Claude Code behaviour.
+
+The older standalone TUI (`k8sh tui`, `k8sh workspace`) is still there as a fallback for a Claude Code that doesn't load mods.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `/k8s-handler:ui` | open the TUI next to Claude |
-| `/k8s-handler:explain [question]` | explain/diagnose what you selected in the TUI (`f`) |
+| `/k8s` | open or close the k8s pane beside the chat |
+| `/k8s-handler:ui` | open the k8s pane (same as `/k8s`) |
+| `/k8s-handler:explain [question]` | explain/diagnose what you sent from the standalone TUI (`f`); in the pane use Ask Claude |
 | `/k8s-handler:status [context]` | contexts + tiers, lock state, Argo CD apps, top warnings |
 | `/k8s-handler:rca <ns> [context] [workload]` | read-only root-cause analysis |
 | `/k8s-handler:validate <path> [context]` | validation pipeline |
@@ -124,9 +124,11 @@ internal/redact      credential scrubbing
 internal/kube        kubectl wrapper, Argo CD, RCA
 internal/validate    validation pipeline
 internal/mcp         stdio MCP server + tools
-internal/tui         terminal UI (stdlib, ANSI, mouse)
+internal/tui         standalone terminal UI (fallback)
 internal/focus       TUI → Claude selection bridge
 .claude-plugin/      plugin + marketplace manifests
+hooks/k8s-pane.js    the k8s pane (Claude Code mod), tests in hooks/k8s-pane.test.ts
+types/index.d.ts     the pane's state contract
 commands/ skills/ agents/ hooks/   Claude Code plugin
 docs/                RBAC, settings, observability
 ```

@@ -1,6 +1,7 @@
 {
   "name": "k8s-handler",
-  "version": "0.3.1",
+  "version": "0.4.0",
+  "types": "./types/index.d.ts",
   "description": "GitOps-first Kubernetes operations for Claude: Argo CD/Workflows, Helm, Kustomize, RCA, validation and security gates, with a hard lock on destructive actions and zero credential exposure.",
   "author": {
     "name": "Milenko",
