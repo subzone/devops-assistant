@@ -1,5 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
+import { linesFor, persona } from './steve-lines.js'
+import { autoVoice } from './k8s-pane.js'
 
 // A fixture cluster behind the k8sh MCP server, and the rest of the engine
 // the pane reaches: panes, the status line, processes, files, the prompt.
@@ -55,10 +57,16 @@ type World = {
   grants: unknown[]
   argoInstalled: boolean
   blits: { requestId: string; key: string; cells: string; columns?: number; rows?: number }[]
+  spoken: string[]
+  voices: (string | undefined)[]
+  asked: { model: string; system?: unknown; prompt: unknown }[]
+  quip: string
+  /** what `say -v '?'` lists */
+  installed: string
 }
 
 function world(on: On): World {
-  const w: World = { calls: [], runs: [], submitted: [], status: { text: undefined }, closed: 0, grants: [], argoInstalled: true, blits: [] }
+  const w: World = { calls: [], runs: [], submitted: [], status: { text: undefined }, closed: 0, grants: [], argoInstalled: true, blits: [], spoken: [], voices: [], asked: [], quip: '"Of course it got OOMKilled. Who the hell set that memory limit?"', installed: 'Fred                en_US    # Hello! My name is Fred.\nRocko (English (US)) en_US    # Hello! My name is Rocko.\n' }
   let open = false
 
   on('command.register', (_, e) => ({ value: { command: e.name } }))
@@ -79,6 +87,18 @@ function world(on: On): World {
   on('ui.blit', (_, e) => {
     w.blits.push(e as World['blits'][number])
     return { value: {} }
+  })
+  on('prompt.edit', (_, e) => ({ text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end), cursor: e.start + e.inputText.length }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', (_, e) => ({ text: e.answer, reason: 'answered' as const }))
+  on('model.complete', (_, e) => {
+    w.asked.push(e as World['asked'][number])
+    return { value: { isAnswered: true as const, text: w.quip, usage: { input_tokens: 1, output_tokens: 1 } } }
+  })
+  on('audio.speak', (_, e) => {
+    w.spoken.push(e.text)
+    w.voices.push((e as { voice?: string }).voice)
+    return { value: { synthesizer: 'say' } }
   })
   on('session.redact', (_, e) => ({ value: e.text.replace(/s3cr3t/g, '[REDACTED]') }))
   on('prompt.submit', (_, e) => {
@@ -147,8 +167,10 @@ function world(on: On): World {
     return fail('unknown tool ' + e.tool)
   })
   on('process.run', (_, e) => {
-    w.runs.push(e)
     const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+    // Steve's voice check, apart from the k8sh runs the tests count
+    if (e.argv[0] === 'say') return ok(w.installed)
+    w.runs.push(e)
     if (e.argv[1] === 'ui-init') return ok('/home/u/.k8sh/ui.token\n')
     if (e.argv[1] === 'grant-from-ui') {
       w.grants.push({ Context: CTX, Namespace: 'payments', Action: 'delete', Target: 'pod/api-2', ExpiresIn: '9m59s' })
@@ -422,36 +444,133 @@ test('/devops-assistant:ui opens the same pane', async ($, on) => {
   expect(w.closed).toBe(0)
 })
 
-test('the ∞ backdrop turns behind the docked terminal pane; the ∞ button turns it off', async ($, on) => {
+/** The glyphs of a Raster's cells, row after row. */
+function glyphsOf(cells: string | undefined) {
+  const bin = atob(String(cells))
+  let s = ''
+  for (let i = 0; i < bin.length; i += 12) s += String.fromCharCode(bin.charCodeAt(i) | (bin.charCodeAt(i + 1) << 8))
+  return s
+}
+const shown = (w: World) => glyphsOf(w.blits.at(-1)?.cells)
+
+test('the backdrop: Steve by default, then ∞, then off, from the look button; none on desktop', async ($, on) => {
   const { w, clock, ui } = await openPane($, on)
-  const raster = await ui.find({ type: 'Raster', key: 'infinity' })
+  const raster = await ui.find({ type: 'Raster', key: 'backdrop' })
   expect(raster?.props).toMatchObject({ columns: 70, rows: 60 })
   // 70 x 60 cells of three u32 each, base64
   expect(String(raster?.props.cells).length).toBe(Math.ceil((70 * 60 * 12) / 3) * 4)
-  // the name and version from plugin.json, under the ∞
-  const bin = atob(String(raster?.props.cells))
-  let glyphs = ''
-  for (let i = 0; i < bin.length; i += 12) glyphs += String.fromCharCode(bin.charCodeAt(i) | (bin.charCodeAt(i + 1) << 8))
-  expect(glyphs).toContain('devops-assistant v9.8.7')
+  // Steve in half blocks, the name and version from plugin.json under him
+  expect(glyphsOf(raster?.props.cells as string)).toContain('▀')
+  expect(glyphsOf(raster?.props.cells as string)).toContain('devops-assistant v9.8.7')
+  expect((await ui.find({ key: 'look' }))?.text).toContain('Steve')
 
+  // the ∞ turns on every frame
+  await ui.press({ key: 'look' })
+  expect((await ui.find({ key: 'look' }))?.text).toContain('∞')
+  expect(await ui.find({ key: 'voice' })).toBeUndefined()
+  const before = w.blits.length
   await clock.advance(83 * 4)
-  expect(w.blits.length).toBeGreaterThanOrEqual(3)
-  expect(w.blits.every(b => b.requestId === 'k8s' && b.key === 'infinity' && b.columns === 70 && b.rows === 60)).toBe(true)
-  expect(new Set(w.blits.map(b => b.cells)).size).toBeGreaterThan(1)
+  expect(w.blits.length - before).toBeGreaterThanOrEqual(3)
+  expect(w.blits.every(b => b.requestId === 'k8s' && b.key === 'backdrop' && b.columns === 70 && b.rows === 60)).toBe(true)
+  expect(new Set(w.blits.slice(before).map(b => b.cells)).size).toBeGreaterThan(1)
+  expect(shown(w)).toContain('devops-assistant v9.8.7')
 
-  await ui.press({ key: 'fx' })
+  // off: no Raster, no frames
+  await ui.press({ key: 'look' })
   expect(await ui.find({ type: 'Raster' })).toBeUndefined()
   const n = w.blits.length
   await clock.advance(2000)
   expect(w.blits.length).toBe(n)
 
-  await ui.press({ key: 'fx' })
-  expect(await ui.find({ type: 'Raster', key: 'infinity' })).toBeDefined()
+  await ui.press({ key: 'look' })
+  expect(await ui.find({ type: 'Raster', key: 'backdrop' })).toBeDefined()
   await ui.unmount()
 
-  // no Raster on desktop
   const desk = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await desk.find({ type: 'Raster' })).toBeUndefined()
-  expect(await desk.find({ key: 'fx' })).toBeUndefined()
+  expect(await desk.find({ key: 'look' })).toBeUndefined()
   await desk.unmount()
 })
+
+test('grumpy Steve: listens, names the tool, reacts to the answer in his own words, speaks with voice on, swears at a new problem', async ($, on) => {
+  const { w, clock, ui } = await openPane($, on)
+  // a grumpy greeting, not said aloud
+  await clock.advance(83 * 2)
+  expect(linesFor('greet', true).some(l => shown(w).includes(l))).toBe(true)
+
+  // typing: sound rings by his headphones
+  await $.prompt.edit({ origin: { kind: 'composer' }, text: 'why is', cursor: 6, start: 6, end: 6, inputText: ' a' })
+  await clock.advance(83 * 2)
+  expect(shown(w)).toContain('╲')
+
+  // a turn: thinking, the tool in his bubble, never its arguments' values
+  await $.turn.start({ turnId: 't1' } as never)
+  await $.tool.call({ tool: 'mcp__plugin_devops-assistant_k8sh__k8s_get', kind: 'pods', namespace: 'payments' } as never)
+  await clock.advance(83 * 2)
+  expect(shown(w)).toContain('checking pods… again')
+  expect(shown(w)).not.toContain('payments')
+
+  // the answer: haiku gets it redacted with the salty persona; his line, not the answer, in the bubble
+  await $.turn.complete({ turnId: 't1', answer: 'The api-2 pod is OOMKilled, password s3cr3t. Raise its memory limit.', durationMs: 5, isAborted: false, reason: 'answered' } as never)
+  await clock.advance(83 * 2)
+  expect(w.asked).toHaveLength(1)
+  expect(w.asked[0].model).toBe('haiku')
+  expect(w.asked[0].system).toBe(persona(true))
+  expect(String(w.asked[0].prompt)).toContain('[REDACTED]')
+  expect(String(w.asked[0].prompt)).not.toContain('s3cr3t')
+  expect(shown(w)).toContain('Of course it got OOMKilled.')
+  expect(shown(w)).not.toContain('Raise its memory limit')
+  expect(w.spoken).toEqual([])
+
+  // voice on: a grumpy line, then his take on the next answer, in Rocko's voice
+  await ui.press({ key: 'voice' })
+  expect((await ui.find({ key: 'voice' }))?.text).toContain('voice on')
+  // (a chatty model is cut to two sentences)
+  w.quip = 'Healthy. For now. Do not touch anything.'
+  await $.turn.complete({ turnId: 't2', answer: 'All pods are healthy now.', durationMs: 5, isAborted: false, reason: 'answered' } as never)
+  expect(w.spoken).toHaveLength(2)
+  expect(linesFor('voiceOn', true)).toContain(w.spoken[0])
+  expect(w.spoken[1]).toBe('Healthy. For now.')
+  expect(w.voices).toEqual(['Rocko (English (US))', 'Rocko (English (US))'])
+
+  // a more natural voice downloaded since: auto takes it the next time voice is turned on
+  w.installed += 'Somevoice (Enhanced) en_GB    # Hello! My name is Somevoice.\n'
+  await ui.press({ key: 'voice' })
+  await ui.press({ key: 'voice' })
+  expect(w.voices.at(-1)).toBe('Somevoice (Enhanced)')
+  w.spoken.length = 2
+  w.voices.length = 2
+
+  // no answer from the model: a canned grumpy line
+  w.quip = ''
+  await $.turn.complete({ turnId: 't3', answer: 'Done.', durationMs: 5, isAborted: false, reason: 'answered' } as never)
+  expect(linesFor('done', true)).toContain(w.spoken[2])
+
+  // a problem the pane had not shown before: a facepalm and a salty line naming it
+  for (const id of [NS, NS, DEPLOY, DEPLOY]) await ui.press({ key: 'row:' + id })
+  // (the k8s_get call above booked a refresh 1.5 s later; its k8sh calls settle over a few ticks)
+  await clock.advance(2000)
+  for (let i = 0; i < 16 && !shown(w).includes('pod/api-2'); i++) await clock.advance(250)
+  expect(shown(w)).toContain('pod/api-2')
+  // seen once: the next refresh says nothing new
+  await clock.advance(15000)
+  expect(shown(w)).not.toContain('pod/api-2')
+  await ui.unmount()
+})
+
+test('auto voice: Premium, then Enhanced, English only, else Rocko', () => {
+  const builtIn = 'Fred                en_US    # Hello!\nRocko (English (US)) en_US    # Hello!\n'
+  expect(autoVoice(builtIn)).toBe('Rocko (English (US))')
+  expect(autoVoice(builtIn + 'Marie (Premium)     fr_FR    # Bonjour\n')).toBe('Rocko (English (US))')
+  expect(autoVoice(builtIn + 'Aaa (Enhanced)      en_US    # Hi\n')).toBe('Aaa (Enhanced)')
+  expect(autoVoice(builtIn + 'Aaa (Enhanced)      en_US    # Hi\nBbb (Premium)       en_GB    # Hi\n')).toBe('Bbb (Premium)')
+})
+
+test('Steve’s persona: grumpy either way, mild swearing only when salty', () => {
+  expect(persona(true)).toContain('crap')
+  expect(persona(true)).toContain('No slurs, no f-word')
+  expect(persona(false)).toContain('No swearing at all')
+  for (const l of linesFor('broke', false)) expect(l).not.toMatch(/crap|damn|hell/i)
+  for (const l of linesFor('broke', true)) expect(l).toContain('{x}')
+})
+

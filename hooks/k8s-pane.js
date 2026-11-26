@@ -10,6 +10,8 @@
 
 import { atom, read, update } from 'claude-code'
 import { FRAME_MS, infinityCells } from './infinity.js'
+import { steveCells } from './steve.js'
+import { line as steveLine, persona, toolLine as steveTool } from './steve-lines.js'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 /** @typedef {import('../types').K8sTab} K8sTab */
@@ -64,10 +66,15 @@ let soon = null
 let serverName = null
 let ticking = false
 
-// The ∞ backdrop: its frame loop, the frame number, the size of the Raster
-// the last terminal draw mounted (null: none mounted), and how many blits in
-// a row the surface refused (the pane hidden: then probe about once a second).
-const FX_KEY = 'infinity'
+// The backdrop (Steve or the ∞): its frame loop, the frame number, the size
+// of the Raster the last terminal draw mounted (null: none mounted), and how
+// many blits in a row the surface refused (the pane hidden: then probe about
+// once a second).
+const FX_KEY = 'backdrop'
+/** @type {'steve' | 'infinity' | 'off'} */
+let fxLook = 'steve'
+let fxVoice = false
+let fxLastKey = ''
 /** @type {{ cancel: () => void } | null} */
 let fxTimer = null
 let fxFrame = 0
@@ -584,6 +591,7 @@ async function refreshTab($, quiet) {
     const lazy = v.expanded.map(id => d.nodes[id]).filter(n => n && n.tab === tab && n.lazy)
     await Promise.all(lazy.map(n => loadKids($, ctx, n)))
   })
+  await noticeProblems($, ctx)
   if (tab === 'lock') await syncStatus($)
 }
 
@@ -651,23 +659,235 @@ function stopTimer() {
   fxTimer?.cancel()
   fxTimer = null
   fxSize = null
+  hush()
 }
 
-/** Repaints the ∞ backdrop in place, without a redraw of the pane. @param {Engine} $ */
+/** Repaints the backdrop in place, without a redraw of the pane; skips a frame that would not change. @param {Engine} $ */
 async function fxTick($) {
   fxFrame += 1
   const size = fxSize
   if (!size || fxBusy) return
   if (fxMiss > 2 && fxFrame % 12 !== 0) return
+  const key = backdropKey(size.cols, size.rows, fxFrame)
+  if (key === fxLastKey && fxMiss === 0) return
   fxBusy = true
   try {
-    const r = await $.ui.blit({ requestId: PANE, key: FX_KEY, columns: size.cols, rows: size.rows, cells: infinityCells(size.cols, size.rows, fxFrame, fxLabel) })
-    fxMiss = r && 'deny' in r && r.deny ? fxMiss + 1 : 0
+    const r = await $.ui.blit({ requestId: PANE, key: FX_KEY, columns: size.cols, rows: size.rows, cells: backdropCells(size.cols, size.rows, fxFrame) })
+    const denied = Boolean(r && 'deny' in r && r.deny)
+    fxMiss = denied ? fxMiss + 1 : 0
+    if (!denied) fxLastKey = key
   } catch {
     fxMiss += 1
   } finally {
     fxBusy = false
   }
+}
+
+/** What a frame shows, as a key: equal keys draw equal cells. @param {number} cols @param {number} rows @param {number} f */
+function backdropKey(cols, rows, f) {
+  if (fxLook === 'infinity') return `i:${cols}x${rows}:${f}`
+  const s = steveState(f)
+  return `s:${cols}x${rows}:${s.pose}:${s.listening ? Math.floor(f / 3) % 3 : '-'}:${s.bubble ?? ''}:${fxLabel}`
+}
+
+/** @param {number} cols @param {number} rows @param {number} f */
+function backdropCells(cols, rows, f) {
+  return fxLook === 'infinity' ? infinityCells(cols, rows, f, fxLabel) : steveCells(cols, rows, f, steveState(f))
+}
+
+// ---------- Steve ----------
+//
+// Steve listens while the person types or dictates (sound rings by his
+// headphones), thinks while Claude works (a bubble says which tool), talks
+// when a turn ends (the answer's first sentence, redacted), facepalms when a
+// new problem shows up in the pane, and grins at a grant. With voice on he
+// says his lines aloud (macOS `say`); his mouth moves until the line ends.
+
+/** @typedef {import('./steve.js').Pose} Pose */
+
+// From the plugin's settings (/config): his voice and whether he swears.
+// 'auto' takes the most natural English voice installed: a downloaded
+// Premium one, then an Enhanced one (whatever Apple names them), else Rocko.
+const DEFAULT_VOICE = 'Rocko (English (US))'
+let voiceSetting = 'auto'
+let voiceName = DEFAULT_VOICE
+let salty = true
+
+/**
+ * The voice for 'auto', from what `say -v '?'` lists here.
+ * @param {string} listing `say -v '?'` output: "<name>  <locale>  # <sample>" per line
+ */
+export function autoVoice(listing) {
+  const english = listing
+    .split('\n')
+    .map(l => /^(.+?)\s+(en_[A-Z]{2})\s+#/.exec(l))
+    .filter(m => m !== null)
+    .map(m => /** @type {RegExpExecArray} */ (m)[1].trim())
+  return english.find(n => /\(Premium\)/.test(n)) ?? english.find(n => /\(Enhanced\)/.test(n)) ?? DEFAULT_VOICE
+}
+
+/** @param {Engine} $ */
+async function pickVoice($) {
+  if (voiceSetting !== 'auto') {
+    voiceName = voiceSetting
+    return
+  }
+  try {
+    const r = await $.process.run(['say', '-v', '?'], { timeoutMs: 5000 })
+    voiceName = autoVoice(r.stdout)
+  } catch {
+    voiceName = DEFAULT_VOICE
+  }
+}
+/** the model call reacting to the last answer, cut by the next @type {AbortController | null} */
+let reacting = null
+
+/** frames for ms at FRAME_MS @param {number} ms */
+const F = ms => Math.round(ms / FRAME_MS)
+/** @type {Pose[]} the mouth while talking: open, half, shut, unevenly */
+const TALK = ['talk2', 'talk1', 'idle', 'talk1', 'talk2', 'talk2', 'talk1', 'idle', 'talk1', 'talk2', 'idle', 'idle']
+
+const steve = {
+  thinking: false,
+  listenUntil: 0,
+  talkUntil: 0,
+  speaking: false,
+  bubble: '',
+  bubbleUntil: 0,
+  /** @type {Pose | null} */
+  mood: null,
+  moodUntil: 0,
+  /** problems already seen, by node id, per context; null before the first load */
+  /** @type {Set<string> | null} */
+  seen: null,
+  seenFor: '',
+  /** @type {AbortController | null} */
+  hush: null,
+}
+
+/** @param {number} f @returns {import('./steve.js').SteveState} */
+function steveState(f) {
+  /** @type {Pose} */
+  let pose
+  if (steve.mood && f < steve.moodUntil) pose = steve.mood
+  else if (steve.speaking || f < steve.talkUntil) pose = TALK[f % TALK.length]
+  else if (steve.thinking) pose = f % 40 < 2 ? 'blink' : 'think'
+  else pose = f % 52 < 2 ? 'blink' : 'idle'
+  let bubble = f < steve.bubbleUntil ? steve.bubble : ''
+  if (!bubble && steve.thinking) bubble = ['·', '· ·', '· · ·'][Math.floor(f / 4) % 3]
+  return { pose, bubble, listening: f < steve.listenUntil && !steve.thinking, label: fxLabel }
+}
+
+/** Plain, one line, cut: what a bubble or a voice may say. @param {string} text */
+function sayable(text) {
+  return text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[*_#>|]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160)
+}
+
+/**
+ * Steve's take on an answer: one grumpy line from a fast model, given the
+ * answer redacted; a canned line when the model has none.
+ * @param {Engine} $ @param {string} answer
+ */
+async function react($, answer) {
+  reacting?.abort()
+  const stop = typeof AbortController === 'function' ? new AbortController() : null
+  reacting = stop
+  try {
+    const text = await $.session.redact(answer.replace(/```[\s\S]*?```/g, ' [code] ').slice(0, 1500))
+    const r = await $.model.complete(
+      { model: 'haiku', system: persona(salty), prompt: `What the assistant just said:\n\n${text}`, maxTokens: 60, effort: 'low', timeoutMs: 8000 },
+      stop ? { signal: stop.signal } : undefined,
+    )
+    if (reacting !== stop) return null
+    const said = r.isAnswered ? sayable(r.text.replace(/^["“']|["”']$/g, '')).split(/(?<=[.!?])\s/).slice(0, 2).join(' ') : ''
+    return said || steveLine('done', salty)
+  } catch {
+    return reacting === stop ? steveLine('done', salty) : null
+  } finally {
+    if (reacting === stop) reacting = null
+  }
+}
+
+/**
+ * Steve says a line: a bubble, his mouth moving, and aloud when voice is on.
+ * @param {Engine} $ @param {string} text
+ * @param {{ mood?: Pose, moodMs?: number, aloud?: boolean }} [opts]
+ */
+async function say($, text, opts = {}) {
+  let line = sayable(text)
+  if (!line) return
+  try {
+    line = await $.session.redact(line)
+  } catch {
+    // keep the line as it is: it came from the pane or the answer
+  }
+  const f = fxFrame
+  const talk = Math.min(F(6000), Math.max(F(1200), Math.round((line.length * 60) / FRAME_MS)))
+  const mood = opts.mood ? F(opts.moodMs ?? 1500) : 0
+  steve.bubble = line
+  steve.talkUntil = f + mood + talk
+  steve.bubbleUntil = f + mood + talk + F(4000)
+  steve.mood = opts.mood ?? null
+  steve.moodUntil = f + mood
+  if (fxVoice && fxLook === 'steve' && opts.aloud !== false && fxTimer) void speak($, line)
+}
+
+/** @param {Engine} $ @param {string} line */
+async function speak($, line) {
+  steve.hush?.abort()
+  const hush = typeof AbortController === 'function' ? new AbortController() : null
+  steve.hush = hush
+  steve.speaking = true
+  try {
+    try {
+      await $.audio.speak(line, { voice: voiceName, ...(hush ? { signal: hush.signal } : {}) })
+    } catch (err) {
+      // the chosen voice is not installed here: the system's default voice
+      if (hush?.signal.aborted) throw err
+      await $.audio.speak(line, hush ? { signal: hush.signal } : undefined)
+    }
+  } catch {
+    // no synthesizer, or cut off by the next line
+  } finally {
+    if (steve.hush === hush) {
+      steve.speaking = false
+      steve.hush = null
+    }
+  }
+}
+
+function hush() {
+  steve.hush?.abort()
+  steve.hush = null
+  steve.speaking = false
+}
+
+/** What Claude is doing, from the tool it calls; names a kind, never arguments' values. @param {Record<string, unknown>} e */
+function toolLine(e) {
+  return steveTool(String(e.tool), typeof e.kind === 'string' ? e.kind.split(',')[0] : '', TOOL_PREFIX)
+}
+
+/** After a refresh: a facepalm and a line for a problem the pane had not shown before. @param {Engine} $ @param {string} ctx */
+async function noticeProblems($, ctx) {
+  const d = await read($, data)
+  const errs = Object.values(d.nodes).filter(n => n.status === 'err')
+  if (steve.seenFor !== ctx || !steve.seen) {
+    steve.seen = new Set(errs.map(n => n.id))
+    steve.seenFor = ctx
+    return
+  }
+  const fresh = errs.filter(n => !steve.seen?.has(n.id))
+  for (const n of errs) steve.seen.add(n.id)
+  if (fresh.length === 0 || !fxTimer || fxLook !== 'steve') return
+  const x = crumb(fresh[0])
+  await say($, fresh.length === 1 ? steveLine('broke', salty, { x }) : steveLine('brokeMany', salty, { x, n: fresh.length - 1 }), { mood: 'oops', moodMs: 2000 })
 }
 
 /** The light refresh: the visible tab and the lock, only while the pane is open. @param {Engine} $ */
@@ -911,6 +1131,7 @@ async function submitUnlock($, typed) {
     update($, view, w => (w.unlock && w.unlock.nodeId === u.nodeId ? { ...w, unlock: { ...w.unlock, ...patch } } : w))
   if (typed !== ctx) {
     await setU({ error: `That is not "${ctx}". Nothing was unlocked.`, isBusy: false })
+    await say($, steveLine('wrongName', salty), { mood: 'oops', moodMs: 1500, aloud: false })
     return
   }
   await setU({ error: undefined, isBusy: true })
@@ -937,8 +1158,10 @@ async function submitUnlock($, typed) {
     }))
   } catch (err) {
     await setU({ error: msg(err), isBusy: false })
+    await say($, steveLine('refused', salty), { mood: 'oops', moodMs: 1500 })
     return
   }
+  await say($, steveLine('granted', salty, { x: `${u.action} ${target}` }), { mood: 'yay', moodMs: 2000 })
   const grants = await loadGrants($).catch(() => null)
   if (grants) await update($, data, x => ({ ...x, grants }))
   await syncStatus($)
@@ -949,6 +1172,31 @@ async function submitUnlock($, typed) {
 
 const ICON = /** @type {Record<string, string>} */ ({ ok: '✔', warn: '⚠', err: '✖', '': '·' })
 const ICON_COLOR = /** @type {Record<string, string>} */ ({ ok: 'success', warn: 'warning', err: 'error', '': 'inactive' })
+
+const LOOK_LABEL = { steve: '☺ Steve', infinity: '∞', off: '○' }
+/** @type {Record<'steve' | 'infinity' | 'off', 'steve' | 'infinity' | 'off'>} */
+const NEXT_LOOK = { steve: 'infinity', infinity: 'off', off: 'steve' }
+
+/** @param {K8sView} v @returns {'steve' | 'infinity' | 'off'} */
+const lookOf = v => v.look ?? (v.fx === false ? 'off' : 'steve')
+
+/** @param {Engine} $ */
+async function cycleLook($) {
+  await update($, view, w => ({ ...w, look: NEXT_LOOK[lookOf(w)] }))
+}
+
+/** @param {Engine} $ */
+async function toggleVoice($) {
+  const on = !(await read($, view)).voice
+  await update($, view, w => ({ ...w, voice: on }))
+  fxVoice = on
+  if (on) {
+    // a voice downloaded since the session started counts
+    await pickVoice($)
+    await say($, steveLine('voiceOn', salty))
+  }
+  else hush()
+}
 
 /** h() answers a node; a pane's tree is always an element. @param {unknown} x */
 const asElement = x => /** @type {import('claude-code').RenderElement} */ (x)
@@ -1013,7 +1261,7 @@ async function draw($, e) {
   const els = $.ui.resolve(e)
   // Raster is the terminal's alone; the backdrop is drawn in the docked pane.
   const Raster = e.surface === 'terminal' && e.props.placement === 'dock' && 'Raster' in els ? els.Raster : undefined
-  const fxOn = v.fx !== false
+  const look = lookOf(v)
 
   if (e.props.placement === 'widget') {
     const all = (d.children[v.tab] ?? []).map(id => d.nodes[id]).filter(Boolean)
@@ -1048,7 +1296,8 @@ async function draw($, e) {
         }),
       ),
       v.busy > 0 ? h(Text, { dimColor: true }, 'loading…') : null,
-      Raster ? h(Button, { key: 'fx', label: '∞', plain: true, dimColor: !fxOn, onPress: () => update($, view, w => ({ ...w, fx: w.fx === false })) }) : null,
+      Raster ? h(Button, { key: 'look', label: LOOK_LABEL[look], plain: true, dimColor: look === 'off', onPress: () => cycleLook($) }) : null,
+      Raster && look === 'steve' ? h(Button, { key: 'voice', label: v.voice ? '♪ voice on' : '♪ voice off', plain: true, dimColor: !v.voice, onPress: () => toggleVoice($) }) : null,
     ),
   )
 
@@ -1200,15 +1449,21 @@ async function draw($, e) {
   if (sel && ctx && unlockActions(sel).length > 0) acts.push(h(Button, { key: 'act:unlock', label: 'Unlock…', onPress: () => openUnlock($, sel) }))
   out.push(h(Box, { flexDirection: 'row', flexWrap: 'wrap', columnGap: 1, marginTop: 1 }, ...acts))
 
-  // The ∞ backdrop: placed first, so everything after paints over it and it
-  // shows only in the cells the pane leaves blank.
+  // The backdrop (Steve or the ∞): placed first, so everything after paints
+  // over it and it shows only in the cells the pane leaves blank.
   let backdrop = null
-  if (Raster && fxOn) {
+  if (e.surface === 'terminal') {
+    fxLook = look
+    fxVoice = v.voice === true
+    if (!fxVoice || look !== 'steve') hush()
+  }
+  if (Raster && look !== 'off') {
     const fxCols = Math.min(512, Math.max(1, e.props.bodyColumns ?? cols))
     const fxRows = Math.min(256, Math.max(1, e.props.scroll?.bodyRows ?? 40))
     fxSize = { cols: fxCols, rows: fxRows }
     fxMiss = 0
-    backdrop = h(Box, { position: 'absolute', top: 0, left: 0 }, h(Raster, { key: FX_KEY, columns: fxCols, rows: fxRows, cells: infinityCells(fxCols, fxRows, fxFrame, fxLabel) }))
+    fxLastKey = backdropKey(fxCols, fxRows, fxFrame)
+    backdrop = h(Box, { position: 'absolute', top: 0, left: 0 }, h(Raster, { key: FX_KEY, columns: fxCols, rows: fxRows, cells: backdropCells(fxCols, fxRows, fxFrame) }))
   } else if (e.surface === 'terminal') {
     fxSize = null
   }
@@ -1225,7 +1480,11 @@ async function draw($, e) {
 async function openPane($, presentation) {
   const columns = presentation ? Math.max(24, Math.floor(presentation.columns * 0.45)) : 200
   const opened = await $.ui.open({ id: PANE, title: 'k8s', focus: true, closeOnEscape: true, columns })
+  // what is broken when the pane opens is the baseline: Steve speaks up only for new problems
+  steve.seen = null
+  steve.thinking = false
   startTimer($)
+  void say($, steveLine('greet', salty), { aloud: false })
   $.clock.after(1, () => {
     void refreshAll($, false)
   })
@@ -1234,8 +1493,11 @@ async function openPane($, presentation) {
   return `k8s pane open ${where}. 1-4 switch tabs, Esc or /k8s closes it.`
 }
 
-/** @param {import('claude-code').On} on */
-export function register(on) {
+/** @param {import('claude-code').On} on @param {import('claude-code').PluginOptions} [options] */
+export function register(on, options) {
+  if (typeof options?.steveVoice === 'string' && options.steveVoice) voiceSetting = options.steveVoice
+  if (typeof options?.steveSwearing === 'boolean') salty = options.steveSwearing
+
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'k8s',
@@ -1243,6 +1505,7 @@ export function register(on) {
       immediate: true,
     })
     await loadLabel($)
+    void pickVoice($)
     await update($, view, v => ({ ...v, busy: 0, unlock: v.unlock ? { ...v.unlock, isBusy: false } : null }))
     if (await isOpen($)) {
       startTimer($)
@@ -1275,8 +1538,63 @@ export function register(on) {
     return next(e)
   }).catch(($, e, next) => next(e))
 
+  // Steve listens while the person types or dictates into the prompt.
+  on('prompt.edit', ($, e, next) => {
+    if (fxTimer) steve.listenUntil = fxFrame + F(1500)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  on('prompt.change', ($, e, next) => {
+    if (fxTimer) steve.listenUntil = fxFrame + F(1500)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // A prompt sent: he stops listening (and talking) and starts thinking.
+  on('prompt.submit', async ($, e, next) => {
+    const result = await next(e)
+    if (fxTimer) {
+      steve.listenUntil = 0
+      steve.bubbleUntil = 0
+      steve.talkUntil = 0
+      steve.thinking = true
+      hush()
+    }
+    return result
+  }).catch(($, e, next) => next(e))
+
+  on('turn.start', ($, e, next) => {
+    if (fxTimer && !e.agentId) steve.thinking = true
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // The turn's answer: Steve says its first sentence (aloud with voice on).
+  on('turn.complete', async ($, e, next) => {
+    const result = await next(e)
+    try {
+      if (fxTimer && !e.agentId) {
+        steve.thinking = false
+        if (e.isAborted) await say($, steveLine('stopped', salty), { aloud: false })
+        else if (e.answer && fxLook === 'steve') {
+          const said = await react($, e.answer)
+          if (said) await say($, said)
+        }
+      }
+    } catch {
+      // Steve is decoration: never fail the turn
+    }
+    return result
+  })
+
   // After Claude uses a k8sh tool, reflect what it just looked at.
   on('tool.call', async ($, e, next) => {
+    if (fxTimer && !e.agentId) {
+      const line = toolLine(/** @type {Record<string, unknown>} */ (/** @type {unknown} */ (e)))
+      if (line) {
+        steve.thinking = true
+        steve.bubble = line
+        steve.bubbleUntil = fxFrame + F(3000)
+      }
+    }
     const result = await next(e)
     if (String(e.tool).startsWith(TOOL_PREFIX) && timer) {
       soon?.cancel()

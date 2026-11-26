@@ -47,8 +47,12 @@ export type K8sView = {
   unlock: K8sUnlock | null
   notice: K8sNotice | null
   busy: number
-  /** the rotating ∞ backdrop (terminal); absent means on */
+  /** the ∞ backdrop's old switch: false meant off (read when `look` is absent) */
   fx?: boolean
+  /** the backdrop in the docked terminal pane; absent means 'steve' */
+  look?: 'steve' | 'infinity' | 'off'
+  /** Steve speaks his lines aloud (macOS `say`); absent means off */
+  voice?: boolean
 }
 
 export type K8sContext = { name: string; tier: string; current: boolean }

@@ -1,6 +1,6 @@
 {
   "name": "devops-assistant",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "types": "./types/index.d.ts",
   "description": "GitOps-first Kubernetes operations for Claude: Argo CD/Workflows, Helm, Kustomize, RCA, validation and security gates, with a hard lock on destructive actions and zero credential exposure.",
   "author": {
@@ -10,5 +10,20 @@
   "homepage": "https://github.com/subzone/devops-assistant",
   "repository": "https://github.com/subzone/devops-assistant",
   "license": "MIT",
+  "userConfig": {
+    "steveVoice": {
+      "type": "string",
+      "title": "Steve's voice",
+      "description": "The macOS voice Steve speaks with when ♪ voice is on in the k8s pane. auto picks the most natural English voice installed: one marked (Premium), then (Enhanced), else Rocko. Download more natural voices in System Settings → Accessibility → Spoken Content → System voice → Manage Voices. A voice that is not installed falls back to the system default.",
+      "default": "auto",
+      "options": ["auto", "Rocko (English (US))", "Reed (English (US))", "Eddy (English (US))", "Grandpa (English (US))", "Ralph", "Fred", "Daniel"]
+    },
+    "steveSwearing": {
+      "type": "boolean",
+      "title": "Steve swears",
+      "description": "Steve is a grumpy DevOps engineer either way. On, he uses mild bad words about the code and the situation (crap, damn, hell). Off, he stays grumpy but clean.",
+      "default": true
+    }
+  },
   "keywords": ["terraform", "opentofu", "crossplane", "aws", "azure", "gcp", "hetzner", "digitalocean", "alibaba", "finops", "kubernetes", "gitops", "argocd", "argo-workflows", "helm", "kustomize", "rca", "devsecops", "aks", "eks", "gke"]
 }
