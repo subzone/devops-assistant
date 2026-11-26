@@ -9,6 +9,7 @@
 // or prompt leads there.
 
 import { atom, read, update } from 'claude-code'
+import { FRAME_MS, infinityCells } from './infinity.js'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 /** @typedef {import('../types').K8sTab} K8sTab */
@@ -62,6 +63,18 @@ let soon = null
 /** @type {string | null} */
 let serverName = null
 let ticking = false
+
+// The ∞ backdrop: its frame loop, the frame number, the size of the Raster
+// the last terminal draw mounted (null: none mounted), and how many blits in
+// a row the surface refused (the pane hidden: then probe about once a second).
+const FX_KEY = 'infinity'
+/** @type {{ cancel: () => void } | null} */
+let fxTimer = null
+let fxFrame = 0
+/** @type {{ cols: number, rows: number } | null} */
+let fxSize = null
+let fxMiss = 0
+let fxBusy = false
 
 // ---------- small helpers ----------
 
@@ -613,6 +626,9 @@ function startTimer($) {
   timer = $.clock.every(REFRESH_MS, () => {
     void tick($)
   })
+  fxTimer ??= $.clock.every(FRAME_MS, () => {
+    void fxTick($)
+  })
 }
 
 function stopTimer() {
@@ -620,6 +636,26 @@ function stopTimer() {
   timer = null
   soon?.cancel()
   soon = null
+  fxTimer?.cancel()
+  fxTimer = null
+  fxSize = null
+}
+
+/** Repaints the ∞ backdrop in place, without a redraw of the pane. @param {Engine} $ */
+async function fxTick($) {
+  fxFrame += 1
+  const size = fxSize
+  if (!size || fxBusy) return
+  if (fxMiss > 2 && fxFrame % 12 !== 0) return
+  fxBusy = true
+  try {
+    const r = await $.ui.blit({ requestId: PANE, key: FX_KEY, columns: size.cols, rows: size.rows, cells: infinityCells(size.cols, size.rows, fxFrame) })
+    fxMiss = r && 'deny' in r && r.deny ? fxMiss + 1 : 0
+  } catch {
+    fxMiss += 1
+  } finally {
+    fxBusy = false
+  }
 }
 
 /** The light refresh: the visible tab and the lock, only while the pane is open. @param {Engine} $ */
@@ -962,6 +998,11 @@ async function draw($, e) {
   const sel = v.selected ? d.nodes[v.selected] : undefined
   const locked = grantsFor(d, ctx).length === 0
 
+  const els = $.ui.resolve(e)
+  // Raster is the terminal's alone; the backdrop is drawn in the docked pane.
+  const Raster = e.surface === 'terminal' && e.props.placement === 'dock' && 'Raster' in els ? els.Raster : undefined
+  const fxOn = v.fx !== false
+
   if (e.props.placement === 'widget') {
     const all = (d.children[v.tab] ?? []).map(id => d.nodes[id]).filter(Boolean)
     const errs = all.filter(n => n.status === 'err').length
@@ -995,6 +1036,7 @@ async function draw($, e) {
         }),
       ),
       v.busy > 0 ? h(Text, { dimColor: true }, 'loading…') : null,
+      Raster ? h(Button, { key: 'fx', label: '∞', plain: true, dimColor: !fxOn, onPress: () => update($, view, w => ({ ...w, fx: w.fx === false })) }) : null,
     ),
   )
 
@@ -1146,7 +1188,20 @@ async function draw($, e) {
   if (sel && ctx && unlockActions(sel).length > 0) acts.push(h(Button, { key: 'act:unlock', label: 'Unlock…', onPress: () => openUnlock($, sel) }))
   out.push(h(Box, { flexDirection: 'row', flexWrap: 'wrap', columnGap: 1, marginTop: 1 }, ...acts))
 
-  return asElement(h(Box, { flexDirection: 'column' }, ...out))
+  // The ∞ backdrop: placed first, so everything after paints over it and it
+  // shows only in the cells the pane leaves blank.
+  let backdrop = null
+  if (Raster && fxOn) {
+    const fxCols = Math.min(512, Math.max(1, e.props.bodyColumns ?? cols))
+    const fxRows = Math.min(256, Math.max(1, e.props.scroll?.bodyRows ?? 40))
+    fxSize = { cols: fxCols, rows: fxRows }
+    fxMiss = 0
+    backdrop = h(Box, { position: 'absolute', top: 0, left: 0 }, h(Raster, { key: FX_KEY, columns: fxCols, rows: fxRows, cells: infinityCells(fxCols, fxRows, fxFrame) }))
+  } else if (e.surface === 'terminal') {
+    fxSize = null
+  }
+
+  return asElement(h(Box, { flexDirection: 'column' }, backdrop, ...out))
 }
 
 // ---------- open / close ----------

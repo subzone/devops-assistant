@@ -54,10 +54,11 @@ type World = {
   closed: number
   grants: unknown[]
   argoInstalled: boolean
+  blits: { requestId: string; key: string; cells: string; columns?: number; rows?: number }[]
 }
 
 function world(on: On): World {
-  const w: World = { calls: [], runs: [], submitted: [], status: { text: undefined }, closed: 0, grants: [], argoInstalled: true }
+  const w: World = { calls: [], runs: [], submitted: [], status: { text: undefined }, closed: 0, grants: [], argoInstalled: true, blits: [] }
   let open = false
 
   on('command.register', (_, e) => ({ value: { command: e.name } }))
@@ -74,6 +75,10 @@ function world(on: On): World {
   on('ui.status', (_, e) => {
     w.status.text = e.text
     return { value: undefined }
+  })
+  on('ui.blit', (_, e) => {
+    w.blits.push(e as World['blits'][number])
+    return { value: {} }
   })
   on('session.redact', (_, e) => ({ value: e.text.replace(/s3cr3t/g, '[REDACTED]') }))
   on('prompt.submit', (_, e) => {
@@ -415,4 +420,33 @@ test('/k8s-handler:ui opens the same pane', async ($, on) => {
   const out = await $.command.run({ command: 'k8s-handler:ui' })
   expect(out.text).toContain('k8s pane open')
   expect(w.closed).toBe(0)
+})
+
+test('the ∞ backdrop turns behind the docked terminal pane; the ∞ button turns it off', async ($, on) => {
+  const { w, clock, ui } = await openPane($, on)
+  const raster = await ui.find({ type: 'Raster', key: 'infinity' })
+  expect(raster?.props).toMatchObject({ columns: 70, rows: 60 })
+  // 70 x 60 cells of three u32 each, base64
+  expect(String(raster?.props.cells).length).toBe(Math.ceil((70 * 60 * 12) / 3) * 4)
+
+  await clock.advance(83 * 4)
+  expect(w.blits.length).toBeGreaterThanOrEqual(3)
+  expect(w.blits.every(b => b.requestId === 'k8s' && b.key === 'infinity' && b.columns === 70 && b.rows === 60)).toBe(true)
+  expect(new Set(w.blits.map(b => b.cells)).size).toBeGreaterThan(1)
+
+  await ui.press({ key: 'fx' })
+  expect(await ui.find({ type: 'Raster' })).toBeUndefined()
+  const n = w.blits.length
+  await clock.advance(2000)
+  expect(w.blits.length).toBe(n)
+
+  await ui.press({ key: 'fx' })
+  expect(await ui.find({ type: 'Raster', key: 'infinity' })).toBeDefined()
+  await ui.unmount()
+
+  // no Raster on desktop
+  const desk = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await desk.find({ type: 'Raster' })).toBeUndefined()
+  expect(await desk.find({ key: 'fx' })).toBeUndefined()
+  await desk.unmount()
 })

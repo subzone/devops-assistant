@@ -47,6 +47,8 @@ export type K8sView = {
   unlock: K8sUnlock | null
   notice: K8sNotice | null
   busy: number
+  /** the rotating ∞ backdrop (terminal); absent means on */
+  fx?: boolean
 }
 
 export type K8sContext = { name: string; tier: string; current: boolean }

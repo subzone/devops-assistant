@@ -27,7 +27,7 @@ import (
 	"github.com/subzone/k8s-handler/internal/validate"
 )
 
-var version = "0.4.0"
+var version = "0.4.1"
 
 const usage = `k8sh — GitOps-first Kubernetes operations with a destructive-action lock
 

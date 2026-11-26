@@ -59,6 +59,7 @@ Type `/k8s` and the cluster view opens on the right side of the chat, inside the
 - The status line shows `k8s <context> [<tier>] LOCKED` (or `UNLOCKED xN`). The pane refreshes on open, on ⟳, on tab or context change, every 15 s while open, and after Claude uses a k8sh tool.
 - **Unlock…** on a pod or workload asks you to type the context name, then issues one grant: delete for pods and daemonsets, delete or scale to 0 for deployments and statefulsets. It is single use, for that exact target, expires within 15 minutes and is audited. Only you can press it: Claude has no tool, command or prompt that reaches it.
 - Everything shown comes from the k8sh MCP tools, so it is redacted. The pane never reads kubeconfig. Switching the pane's context doesn't change kubectl's current context.
+- In the docked terminal pane, a rotating 3D ∞ (the DevOps loop) turns in the background, in blues, with pulses flowing round it. It shows only in empty cells, so it never covers text. The `∞` button in the tab row turns it off or on.
 - The right-side dock needs Claude Code's fullscreen layout and a wide enough terminal. Otherwise the pane opens above the prompt, which is normal Claude Code behaviour.
 
 The older standalone TUI (`k8sh tui`, `k8sh workspace`) is still there as a fallback for a Claude Code that doesn't load mods.
@@ -128,6 +129,7 @@ internal/tui         standalone terminal UI (fallback)
 internal/focus       TUI → Claude selection bridge
 .claude-plugin/      plugin + marketplace manifests
 hooks/k8s-pane.js    the k8s pane (Claude Code mod), tests in hooks/k8s-pane.test.ts
+hooks/infinity.js    the pane's rotating ∞ backdrop (pure renderer)
 types/index.d.ts     the pane's state contract
 commands/ skills/ agents/ hooks/   Claude Code plugin
 docs/                RBAC, settings, observability
