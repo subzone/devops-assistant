@@ -29,6 +29,11 @@ The k8s pane's unlock has the same same-user limit. `k8sh grant-from-ui` can't t
 ### Local configuration is not locked
 `k8sh config` (tiers, TTL ceiling 1-15 min) and `k8sh settings apply` (add-only deny rules + status line) can be run by Claude. Neither can weaken the lock: tiers never relax it, the TTL ceiling can't exceed 15 minutes, and settings merge only adds rules. Direct file access to `~/.k8sh` (grants, signing key, audit log) stays blocked.
 
+### Monitoring, history and incidents
+- **Read-only towards clusters.** `fleet_status`, `security_overview`, `rca_collect` and the pane's monitor only read (pods, nodes, events, NetworkPolicies, ClusterRoleBindings, Argo CD apps). The security checks read pod specs and bindings, never Secrets.
+- **Local records.** RCA history (`~/.k8sh/rca-history.json`) and incidents (`~/.k8sh/incidents.json`) are written by k8sh alone, 0600, with every text redacted first. Claude reaches them only through the tools (`rca_history`, `incident_*`); the guard keeps blocking direct access to `~/.k8sh`. Claude can open, note and resolve incidents, since that is bookkeeping on this machine and changes nothing in a cluster; `incident_open` and `incident_status` are in the audit log.
+- **Monitoring is off by default** and runs only while you have it on, at the interval you set. Each run reads pods and events cluster-wide, so on large clusters pick a longer interval or fewer contexts.
+
 ## Credentials
 - **Redaction** (`internal/redact`) runs on every value k8sh returns and on the audit log: Secret `data`/`stringData` (keys stay visible), `last-applied-configuration`, sensitive env values, and token patterns (JWT, AWS, GitHub, Slack, Grafana, PEM, URL credentials, Authorization headers, key=value pairs).
 - **Blocked reads:** `kubectl get secret -o …`, `config view --raw`, `base64 -d`, env dumps, and `~/.kube`, `~/.aws`, `~/.azure`, gcloud config, `.env`, `*.pem|key|p12`.

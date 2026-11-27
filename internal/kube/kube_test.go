@@ -28,6 +28,18 @@ func TestGetRedactsSecrets(t *testing.T) {
 	}
 }
 
+// kubectl 1.37 takes --all-namespaces only after the verb.
+func TestAllNamespacesAfterVerb(t *testing.T) {
+	var got []string
+	c := &Client{Kubectl: "kubectl", Exec: fake(`{"items":[]}`, &got)}
+	if _, err := c.GetJSON(context.Background(), Scope{Context: "dev", Namespace: "ignored"}, "pods", "", "", true); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, " ") != "kubectl --context dev get pods --all-namespaces -o json" {
+		t.Fatalf("unexpected args: %v", got)
+	}
+}
+
 func TestFlagInjectionRejected(t *testing.T) {
 	var got []string
 	c := &Client{Kubectl: "kubectl", Exec: fake("{}", &got)}

@@ -61,7 +61,16 @@ Type `/k8s` and the cluster view opens on the right side of the chat, inside the
  [ Ask Claude ] [ ← Back ] [ ⌂ Top ] [ ⟳ Refresh ]     │
  [ Unlock… ]                                           │
 ```
-- Tabs (hotkeys 1-4): Cluster (namespaces → workloads → pods → containers), Argo CD (apps → resources, problems first), RCA (ranked findings + recent warnings), Lock (lock state, active grants with expiry, contexts and tiers).
+- Tabs (hotkeys 1-7): Cluster (namespaces → workloads → pods → containers), Argo CD (apps → resources, problems first), RCA (ranked findings, recent warnings and 7 days of history), Lock (lock state, active grants with expiry, contexts and tiers), Fleet, Security, Incidents (below).
+
+### Fleet, security, history, monitoring and incidents
+
+- **Fleet (5):** every context at a glance, troubled ones first: reachable, nodes ready, failing and not-ready pods, warning events of the last 15 minutes, degraded or out-of-sync Argo CD apps, and the top problems. **Switch to** opens a context in the other tabs.
+- **Security (6):** read-only posture checks, worst first: privileged containers, host network/PID/IPC and hostPath, dangerous capabilities, root, privilege escalation, unpinned images, missing memory limits, writable root filesystems, cluster-admin bound to people or app service accounts, namespaces without a NetworkPolicy. Each check lists the workloads that break it (Events, Describe and Ask Claude work on them) and how to fix it through Git. Not a vulnerability scan.
+- **RCA history:** k8sh records every RCA collection on this machine: when each problem was first and last seen, how often it came back, when it resolved. The RCA tab shows the last 7 days; Claude reads it with `rca_history` ("since when?", "has this happened before?").
+- **Monitoring:** off until you switch it on in the Incidents tab. Then every 60 s (setting **Monitoring: every N seconds**) it collects RCA on the watched contexts (setting **Monitoring: contexts**: current, all, or a list) and turns what opened or resolved into alerts: a toast, Steve, the Incidents tab, and a note on every active incident that names the object. The first run is a baseline: one line about what is broken already. The status line shows `◉ monitoring` while it runs.
+- **Incidents (7):** **Open incident…** on any ✖/⚠ row (a pod, an alert, a security check, a context) records an incident with a severity (sev1-sev4), the objects involved and the row's details. On an incident: **Note…**, **Mitigated**, **Resolve**, **Reopen**, and **Draft postmortem**, which asks Claude for a blameless postmortem in `docs/incidents/<id>.md` from the timeline, the RCA history and what changed. Claude manages them too (`incident_*` tools). Incidents live in `~/.k8sh/incidents.json`, redacted; nothing about them touches a cluster.
+- Health ages out what is over: an OOM kill on a container that has been ready for more than an hour, a Job run that failed hours ago and an evicted leftover count as history (shown in details), not as failing pods, in the pane, the fleet view, RCA and monitoring.
 - Click a row to select it; click it again to expand or collapse it. The breadcrumb jumps back to any level; `⌂` collapses everything. Long lists show 30 rows with `more…`. The actions sit right under the breadcrumb, and while logs or describe output is open the tree shows only the rows around your selection.
 - Namespaces show their pods' health (`payments  ✖2 ⚠1`) and broken ones sort first, from one all-namespaces pods call (reused for up to a minute by the background refresh). The **filter** field narrows the top level as you type; **⚠ problems only** hides healthy rows.
 - Pods are placed under their workload by owner (pod → ReplicaSet → Deployment, StatefulSet, DaemonSet), Job pods under their Job, with label matching as the fallback. Init containers count: a pod stuck in `Init:CrashLoopBackOff` says so. Pod rows show age and when the last restart was (`r:12 (last 30s ago)  age 3d`). If the selected pod is replaced in a rollout, the selection falls back to its workload.
@@ -119,7 +128,8 @@ Tiers are labels: destructive actions stay locked on every tier.
 
 ## MCP tools
 
-Read: `k8s_contexts`, `k8s_get`, `k8s_describe`, `k8s_events`, `k8s_logs`, `argo_apps`, `argo_app_tree`, `rca_collect`, `validate_manifests`, `lock_status`, `tui_focus`
+Read: `k8s_contexts`, `k8s_get`, `k8s_describe`, `k8s_events`, `k8s_logs`, `argo_apps`, `argo_app_tree`, `rca_collect`, `rca_history`, `fleet_status`, `security_overview`, `incident_list`, `validate_manifests`, `lock_status`, `tui_focus`
+Local records (this machine only, never a cluster): `incident_open`, `incident_note`, `incident_status`
 Locked: `destructive_delete`, `destructive_scale_zero`
 
 Prometheus and Grafana: use their MCP servers alongside this one. See [docs/observability.md](docs/observability.md).

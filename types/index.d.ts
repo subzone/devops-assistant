@@ -1,7 +1,17 @@
 // State contract of the k8s side pane (hooks/k8s-pane.js).
 // Change a `shape` tag in the module when a value's fields change.
 
-export type K8sTab = 'cluster' | 'argo' | 'rca' | 'lock'
+export type K8sTab = 'cluster' | 'argo' | 'rca' | 'lock' | 'fleet' | 'security' | 'incidents'
+
+/** An inline form under the tree: open an incident from a row, or add a note to one. */
+export type K8sForm = {
+  kind: 'open' | 'note'
+  /** the row it is about: any row for 'open', an Incident row for 'note' */
+  nodeId: string
+  severity?: 'sev1' | 'sev2' | 'sev3' | 'sev4'
+  error?: string
+  isBusy?: boolean
+}
 
 export type K8sStatus = 'ok' | 'warn' | 'err' | ''
 
@@ -25,6 +35,8 @@ export type K8sNode = {
   lazy: boolean
   /** a Namespace's failing (✖) and not-ready (⚠) pods */
   counts?: { err: number; warn: number }
+  /** the kube context a row belongs to, where it is not the pane's (fleet rows, alerts) */
+  context?: string
 }
 
 export type K8sDetail = { title: string; text: string }
@@ -61,6 +73,9 @@ export type K8sView = {
   problemsOnly?: boolean
   /** Steve's ears: recording ('rec') or transcribing ('stt'); absent when idle */
   ear?: 'rec' | 'stt'
+  /** background monitoring on (rca_collect on the watched contexts every monitorEverySeconds) */
+  monitor?: boolean
+  form?: K8sForm | null
 }
 
 export type K8sContext = { name: string; tier: string; current: boolean }

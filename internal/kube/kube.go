@@ -37,6 +37,15 @@ func DefaultExec(ctx context.Context, name string, args ...string) ([]byte, erro
 type Client struct {
 	Exec    Exec
 	Kubectl string
+	// Now is the clock that ages past problems; time.Now when nil.
+	Now func() time.Time
+}
+
+func (c *Client) now() time.Time {
+	if c.Now != nil {
+		return c.Now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func New() *Client { return &Client{Exec: DefaultExec, Kubectl: "kubectl"} }
@@ -104,11 +113,11 @@ func (s Scope) args(allNS bool) ([]string, error) {
 	if err := check("namespace", s.Namespace); err != nil {
 		return nil, err
 	}
+	// --context and -n are global flags and may lead; --all-namespaces is the
+	// verb's own and must follow it (kubectl 1.37 refuses it in front, as a
+	// plugin lookup), so GetJSON adds it after "get".
 	a := []string{"--context", s.Context}
-	switch {
-	case allNS:
-		a = append(a, "--all-namespaces")
-	case s.Namespace != "":
+	if !allNS && s.Namespace != "" {
 		a = append(a, "-n", s.Namespace)
 	}
 	return a, nil
@@ -126,6 +135,9 @@ func (c *Client) GetJSON(ctx context.Context, s Scope, kind, name, selector stri
 		return nil, err
 	}
 	a = append(a, "get", kind)
+	if allNS {
+		a = append(a, "--all-namespaces")
+	}
 	if name != "" {
 		a = append(a, name)
 	}

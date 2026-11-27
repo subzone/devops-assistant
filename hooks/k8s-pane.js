@@ -38,6 +38,9 @@ const TABS = [
   { id: 'argo', label: 'Argo CD', hotkey: '2' },
   { id: 'rca', label: 'RCA', hotkey: '3' },
   { id: 'lock', label: 'Lock', hotkey: '4' },
+  { id: 'fleet', label: 'Fleet', hotkey: '5' },
+  { id: 'security', label: 'Security', hotkey: '6' },
+  { id: 'incidents', label: 'Incidents', hotkey: '7' },
 ]
 
 /** @type {K8sView} */
@@ -251,6 +254,12 @@ async function namespaceCounts($, ctx, quiet) {
 /** @param {K8sStatus} s */
 const rank = s => (s === 'err' ? 2 : s === 'warn' ? 1 : 0)
 
+// Fleet and Security read whole clusters: the quiet refresh spares them.
+const SLOW_TABS = new Set(['fleet', 'security'])
+const SLOW_MS = 120000
+/** when a tab was last loaded, by tab|context @type {Map<string, number>} */
+const loadedAt = new Map()
+
 /** @param {Engine} $ @param {string} ctx @param {boolean} quiet @returns {Promise<K8sNode[]>} */
 async function loadNamespaces($, ctx, quiet) {
   const [j, counts] = await Promise.all([callJSON($, 'k8s_get', { kind: 'namespaces', context: ctx }), namespaceCounts($, ctx, quiet)])
@@ -281,6 +290,9 @@ function conditions(o) {
 
 // Waiting reasons that mean a container is only on its way up, not broken.
 const STARTING = new Set(['ContainerCreating', 'PodInitializing'])
+// Within this, a past OOM kill or a failed Job run is a problem now; older,
+// it is history (as k8sh's fleet and RCA see it).
+const RECENT_MS = 3600e3
 
 /** How long ago, short: 45s, 12m, 5h, 3d. @param {number} ms epoch ms @param {number} now */
 function ago(ms, now) {
@@ -345,15 +357,31 @@ function podHealth(p, now) {
       const finished = Date.parse(str(cs, 'lastState', 'terminated', 'finishedAt'))
       if (!Number.isNaN(finished) && finished > lastRestart) lastRestart = finished
       if (last === 'OOMKilled') {
-        cst = 'err'
-        if (!init) mainReason = 'OOMKilled'
+        // an old OOM kill on a ready container is history, not a problem now
+        const since = now - finished
+        if (dig(cs, 'ready') !== true || Number.isNaN(finished) || since <= RECENT_MS) {
+          cst = 'err'
+          if (!init) mainReason = 'OOMKilled'
+        } else if (since <= 24 * 3600e3) {
+          if (cst === 'ok') cst = 'warn'
+          if (!init && !mainReason) mainReason = 'OOMKilled earlier'
+        }
       }
       if (cst === 'err' || (cst === 'warn' && st === 'ok')) st = cst
       containers.push({ name: str(cs, 'name'), init, state, status: cst, restarts: r, last, image: str(cs, 'image') })
     }
   }
   if (phase === 'Pending' && st === 'ok') st = 'warn'
-  if (phase === 'Failed' || phase === 'Unknown') st = 'err'
+  if (phase === 'Unknown') st = 'err'
+  if (phase === 'Failed') {
+    // an evicted leftover is ⚠; a Job run that failed a while ago is history
+    const ends = list(dig(p, 'status', 'containerStatuses'))
+      .map(cs => Date.parse(str(cs, 'state', 'terminated', 'finishedAt')))
+      .filter(t => !Number.isNaN(t))
+    const old = ownerOf(p)?.kind === 'Job' && ends.length > 0 && now - Math.max(...ends) > RECENT_MS
+    st = str(p, 'status', 'reason') === 'Evicted' ? 'warn' : old ? '' : 'err'
+    if (str(p, 'status', 'reason') === 'Evicted') mainReason = 'Evicted'
+  }
   if (phase === 'Succeeded') st = ''
   // stuck in init: say why; past it, the main containers' reason
   const reason = initBroken ? initReason : mainReason || initReason
@@ -564,12 +592,14 @@ async function loadRCA($, ctx) {
     const sev = num(f, 'severity')
     const object = str(f, 'object')
     const signal = str(f, 'signal')
+    const ns = str(f, 'namespace')
     return mk('rca', 'rca', 'f:' + i, {
-      label: `[${sev}] ${signal}  ${object}`,
+      label: `[${sev}] ${signal}  ${ns ? ns + '/' : ''}${object}`,
       status: sev >= 8 ? 'err' : 'warn',
       kind: 'Finding',
+      ns,
       name: object,
-      detail: [`Finding: ${signal}`, `object: ${object}`, `severity: ${sev}`, '', str(f, 'detail')],
+      detail: [`Finding: ${signal}`, `object: ${ns ? ns + '/' : ''}${object}`, `severity: ${sev}`, '', str(f, 'detail')],
     })
   })
   if (out.length === 0) out.push(mk('rca', 'rca', 'clean', { label: 'no problem signals in pods', status: 'ok' }))
@@ -593,6 +623,234 @@ async function loadRCA($, ctx) {
     })
   }
   if (str(r, 'hint')) out.push(mk('rca', 'rca', 'hint', { label: 'hint: ' + str(r, 'hint') }))
+  out.push(...(await loadHistory($, ctx)))
+  return out
+}
+
+/**
+ * RCA history (k8sh's rca-history): every problem of the last 7 days, when
+ * it started, whether it came back, when it went away.
+ * @param {Engine} $ @param {string} ctx @returns {Promise<K8sNode[]>}
+ */
+async function loadHistory($, ctx) {
+  /** @type {unknown[]} */
+  let recs
+  try {
+    recs = list(await callJSON($, 'rca_history', { context: ctx, days: 7 }))
+  } catch (err) {
+    return [mk('rca', 'rca', 'history', { label: 'history: ' + cut(msg(err), 80), status: 'warn', kind: 'Info' })]
+  }
+  const now = Date.now()
+  const open = recs.filter(x => !str(x, 'resolvedAt'))
+  const h = mk('rca', 'rca', 'history', {
+    label: `history, 7 days: ${open.length} open · ${recs.length - open.length} resolved`,
+    kind: 'History',
+    detail: ['Every RCA collection is recorded on this machine (k8sh, ~/.k8sh/rca-history.json, redacted):', 'when each problem was first and last seen, how often it came back, and when it went away.'],
+  })
+  const kids = recs.slice(0, 200).map((x, i) => {
+    const ns = str(x, 'namespace')
+    const what = `${str(x, 'signal')}  ${ns ? ns + '/' : ''}${str(x, 'object')}`
+    const first = Date.parse(str(x, 'firstSeen'))
+    const resolved = Date.parse(str(x, 'resolvedAt'))
+    const times = num(x, 'times')
+    const since = Number.isNaN(first) ? '' : `since ${ago(first, now)} ago`
+    const back = times > 1 ? ` · ${times}× so far` : ''
+    const label = Number.isNaN(resolved) ? `open  ${what}  ${since}${back}` : `resolved ${ago(resolved, now)} ago  ${what}${back}`
+    /** @type {K8sStatus} */
+    const status = Number.isNaN(resolved) ? (num(x, 'severity') >= 8 ? 'err' : 'warn') : ''
+    return mk('rca', h.id, 'r:' + i, {
+      label,
+      status,
+      kind: 'Finding',
+      ns,
+      name: str(x, 'object'),
+      detail: [
+        `${str(x, 'signal')} on ${ns ? ns + '/' : ''}${str(x, 'object')}`,
+        `first seen: ${str(x, 'firstSeen')}`,
+        `last seen: ${str(x, 'lastSeen')}`,
+        `occurrences: ${times}, seen in ${num(x, 'seen')} collections`,
+        Number.isNaN(resolved) ? 'still open' : `resolved: ${str(x, 'resolvedAt')}`,
+        '',
+        str(x, 'detail'),
+      ],
+    })
+  })
+  if (kids.length === 0) kids.push(mk('rca', h.id, 'none', { label: '(nothing recorded in 7 days)' }))
+  return [h, ...kids]
+}
+
+/**
+ * Fleet: every context at a glance (k8sh fleet_status), the troubled ones first.
+ * @param {Engine} $ @returns {Promise<K8sNode[]>}
+ */
+async function loadFleet($) {
+  const rows = list(await callJSON($, 'fleet_status', {}))
+  const nodes = rows.map(r => {
+    const ctx = str(r, 'context')
+    const reach = dig(r, 'reachable') === true
+    const failing = num(r, 'podsFailing')
+    const notReady = num(r, 'podsNotReady')
+    const nodesAll = num(r, 'nodes')
+    const nodesReady = num(r, 'nodesReady')
+    const degraded = num(r, 'argoDegraded')
+    const outOfSync = num(r, 'argoOutOfSync')
+    const warnings = num(r, 'warnings15m')
+    /** @type {K8sStatus} */
+    const status = !reach || failing > 0 || nodesReady < nodesAll || degraded > 0 ? 'err' : notReady > 0 || outOfSync > 0 || warnings > 0 ? 'warn' : 'ok'
+    let label = `${ctx} [${str(r, 'tier')}]  `
+    if (!reach) label += 'unreachable'
+    else {
+      label += failing || notReady ? `pods ✖${failing} ⚠${notReady}` : `pods ✔${num(r, 'pods')}`
+      label += `  nodes ${nodesReady}/${nodesAll}`
+      if (dig(r, 'argoInstalled') === true) label += degraded || outOfSync ? `  argo ✖${degraded} ⚠${outOfSync}` : '  argo ✔'
+      if (warnings) label += `  ${warnings} warn/15m`
+    }
+    const detail = reach
+      ? [
+          `Context ${ctx} [${str(r, 'tier')}]`,
+          `nodes ready: ${nodesReady}/${nodesAll}`,
+          `pods: ${num(r, 'pods')} (${failing} failing, ${notReady} not ready)`,
+          `warning events, last 15 min: ${warnings}`,
+          dig(r, 'argoInstalled') === true ? `Argo CD apps: ${num(r, 'argoApps')} (${degraded} degraded, ${outOfSync} out of sync)` : 'Argo CD: not installed',
+          '',
+          'Switch to shows it in the other tabs.',
+        ]
+      : [`Context ${ctx}`, 'unreachable:', str(r, 'error')]
+    const n = mk('fleet', 'fleet', 'ctx:' + ctx, { label, status, kind: 'Context', name: ctx, context: ctx, detail })
+    const kids = list(dig(r, 'topProblems')).map((p, i) => mk('fleet', n.id, 'p:' + i, { label: String(p), status: 'err', kind: 'Info', detail: [String(p)] }))
+    return { n, kids }
+  })
+  nodes.sort((a, b) => rank(b.n.status) - rank(a.n.status) || a.n.name.localeCompare(b.n.name))
+  const out = nodes.flatMap(x => [x.n, ...x.kids])
+  if (out.length === 0) out.push(mk('fleet', 'fleet', 'none', { label: '(no contexts)' }))
+  return out
+}
+
+const KINDS = /** @type {Record<string, string>} */ ({ deployment: 'Deployment', statefulset: 'StatefulSet', daemonset: 'DaemonSet', job: 'Job', cronjob: 'CronJob', pod: 'Pod', replicaset: 'ReplicaSet', namespace: 'Namespace' })
+
+/**
+ * Security: read-only posture checks (k8sh security_overview), worst first;
+ * each check lists the workloads that break it, ready for Events/Describe.
+ * @param {Engine} $ @param {string} ctx @returns {Promise<K8sNode[]>}
+ */
+async function loadSecurity($, ctx) {
+  const r = await callJSON($, 'security_overview', { context: ctx })
+  const sum = /** @type {Record<string, number>} */ (dig(r, 'summary') ?? {})
+  /** @type {K8sNode[]} */
+  const out = [
+    mk('security', 'security', 'summary', {
+      label: `checks failing: ${sum.high ?? 0} high · ${sum.medium ?? 0} medium · ${sum.low ?? 0} low`,
+      status: (sum.high ?? 0) > 0 ? 'err' : (sum.medium ?? 0) > 0 ? 'warn' : 'ok',
+      kind: 'Info',
+      detail: [str(r, 'note'), ...list(dig(r, 'skipped')).map(s => 'skipped: ' + String(s))],
+    }),
+  ]
+  for (const c of list(dig(r, 'checks'))) {
+    const sev = str(c, 'severity')
+    const id = str(c, 'id')
+    const n = mk('security', 'security', 'check:' + id, {
+      label: `${sev.toUpperCase()}  ${str(c, 'title')} (${num(c, 'count')})`,
+      status: sev === 'high' ? 'err' : sev === 'medium' ? 'warn' : '',
+      kind: 'Check',
+      name: id,
+      detail: [`${str(c, 'title')}: ${num(c, 'count')}`, `severity: ${sev}`, '', 'fix: ' + str(c, 'advice'), '', 'Change the manifests and open a PR; Ask Claude can draft it.'],
+    })
+    out.push(n)
+    for (const o of list(dig(c, 'objects'))) {
+      const s = String(o)
+      // namespace/kind/name, or a clusterrolebinding line
+      const m = /^([^/]+)\/([a-z]+)\/(.+)$/.exec(s)
+      const kind = m ? KINDS[m[2]] ?? 'Info' : 'Info'
+      out.push(
+        mk('security', n.id, 'o:' + s, {
+          label: s,
+          status: n.status,
+          kind,
+          ns: m && kind !== 'Namespace' ? m[1] : '',
+          name: m ? m[3] : '',
+          detail: [s, `fails: ${str(c, 'title')}`, 'fix: ' + str(c, 'advice')],
+        }),
+      )
+    }
+  }
+  if (out.length === 1) out.push(mk('security', 'security', 'clean', { label: 'no check failing ✔', status: 'ok' }))
+  return out
+}
+
+/** @param {string} status */
+const incidentStatus = status => /** @type {K8sStatus} */ (status === 'open' ? 'err' : status === 'mitigated' ? 'warn' : '')
+
+/**
+ * Incidents: the monitor's alerts of this session, then the incidents k8sh
+ * keeps (active first, the last 10 resolved), each with its timeline.
+ * @param {Engine} $ @returns {Promise<K8sNode[]>}
+ */
+async function loadIncidents($) {
+  const now = Date.now()
+  /** @type {K8sNode[]} */
+  const out = []
+  const al = mk('incidents', 'incidents', 'alerts', {
+    label: `alerts, this session (${alerts.length})${monitor.timer ? '' : ' — monitoring is off'}`,
+    status: alerts.some(a => a.open) ? 'err' : '',
+    kind: 'Info',
+    detail: ['What the monitor saw open or resolve while it ran (every ' + Math.round(monitorMs / 1000) + ' s, ' + monitorScope() + ').', 'Open incident on an alert to track it.'],
+  })
+  out.push(al)
+  alerts.slice(0, 50).forEach((a, i) =>
+    out.push(
+      mk('incidents', al.id, 'a:' + i, {
+        label: `${a.open ? '✖' : '✔ resolved'}  ${a.context}  ${a.ns ? a.ns + '/' : ''}${a.object}  ${a.signal}  ${ago(a.at, now)} ago`,
+        status: a.open ? (a.severity >= 8 ? 'err' : 'warn') : '',
+        kind: 'Alert',
+        ns: a.ns,
+        name: a.object,
+        context: a.context,
+        detail: [`${a.open ? 'Opened' : 'Resolved'}: ${a.signal} on ${a.ns ? a.ns + '/' : ''}${a.object}`, `context: ${a.context}`, `severity: ${a.severity}`, `at: ${new Date(a.at).toISOString()}`, '', a.detail],
+      }),
+    ),
+  )
+  const list_ = list(await callJSON($, 'incident_list', {}))
+  const active = list_.filter(x => str(x, 'status') !== 'resolved')
+  const resolved = list_.filter(x => str(x, 'status') === 'resolved').slice(0, 10)
+  const ac = mk('incidents', 'incidents', 'active', { label: `active incidents (${active.length})`, status: active.length ? 'err' : 'ok', kind: 'Info' })
+  const rs = mk('incidents', 'incidents', 'resolved', { label: `resolved, latest ${resolved.length}`, kind: 'Info' })
+  for (const [group, items] of /** @type {const} */ ([
+    [ac, active],
+    [rs, resolved],
+  ])) {
+    out.push(group)
+    for (const x of items) {
+      const id = str(x, 'id')
+      const opened = Date.parse(str(x, 'openedAt'))
+      const n = mk('incidents', group.id, 'inc:' + id, {
+        label: `${id} ${str(x, 'severity')} ${str(x, 'status')}  ${str(x, 'title')}  ${Number.isNaN(opened) ? '' : ago(opened, now) + ' ago'}`,
+        status: incidentStatus(str(x, 'status')),
+        kind: 'Incident',
+        ns: str(x, 'namespace'),
+        name: id,
+        detail: [
+          `${id}: ${str(x, 'title')}`,
+          `severity ${str(x, 'severity')}, ${str(x, 'status')}`,
+          `context: ${str(x, 'context') || '—'}${str(x, 'namespace') ? ', namespace ' + str(x, 'namespace') : ''}`,
+          `objects: ${list(dig(x, 'objects')).join(', ') || '—'}`,
+          `opened: ${str(x, 'openedAt')}${str(x, 'resolvedAt') ? ', resolved: ' + str(x, 'resolvedAt') : ''}`,
+        ],
+      })
+      out.push(n)
+      list(dig(x, 'timeline')).forEach((t, i) => {
+        const at = Date.parse(str(t, 'at'))
+        out.push(
+          mk('incidents', n.id, 't:' + i, {
+            label: `${Number.isNaN(at) ? '' : clock(str(t, 'at'))}  ${str(t, 'by')}: ${str(t, 'text')}`,
+            status: str(t, 'kind') === 'alert' ? 'warn' : '',
+            kind: 'Info',
+            detail: [`${str(t, 'at')} ${str(t, 'by')} (${str(t, 'kind')})`, '', str(t, 'text')],
+          }),
+        )
+      })
+    }
+    if (items.length === 0) out.push(mk('incidents', group.id, 'none', { label: group === ac ? '(none — good)' : '(none)' }))
+  }
   return out
 }
 
@@ -652,6 +910,12 @@ function loadRoots($, tab, ctx, quiet = false) {
       return loadRCA($, ctx)
     case 'lock':
       return loadLock($, ctx)
+    case 'fleet':
+      return loadFleet($)
+    case 'security':
+      return loadSecurity($, ctx)
+    case 'incidents':
+      return loadIncidents($)
     default:
       return loadNamespaces($, ctx, quiet)
   }
@@ -714,7 +978,7 @@ async function busy($, quiet, fn) {
 async function syncStatus($) {
   const v = await read($, view)
   const d = await read($, data)
-  if (v.context) $.ui.status(`k8s ${v.context} [${tierOf(d, v.context)}] ${lockText(d, v.context)}`)
+  if (v.context) $.ui.status(`k8s ${v.context} [${tierOf(d, v.context)}] ${lockText(d, v.context)}${monitor.timer ? ' · ◉ monitoring' : ''}`)
 }
 
 /**
@@ -742,13 +1006,21 @@ async function keepSelection($) {
   )
 }
 
-/** Loads the visible tab's top level, then every expanded lazy node under it. @param {Engine} $ @param {boolean} quiet */
-async function refreshTab($, quiet) {
+/**
+ * Loads the visible tab's top level, then every expanded lazy node under it.
+ * @param {Engine} $ @param {boolean} quiet no busy indicator
+ * @param {boolean} [force] reload a cluster-wide tab even if it is fresh (⟳, opening)
+ */
+async function refreshTab($, quiet, force = !quiet) {
   const { tab, context: ctx } = await read($, view)
   if (!ctx) return
+  // cluster-wide tabs: the background refresh reloads them at most every 2 minutes
+  const key = tab + '|' + ctx
+  if (!force && SLOW_TABS.has(tab) && Date.now() - (loadedAt.get(key) ?? 0) < SLOW_MS) return
   await busy($, quiet, async () => {
     try {
       const roots = await loadRoots($, tab, ctx, quiet)
+      loadedAt.set(key, Date.now())
       if ((await read($, view)).context !== ctx) return
       await update($, data, d => ({ ...replaceUnder(d, tab, roots), loadedFor: ctx }))
     } catch (err) {
@@ -801,7 +1073,7 @@ async function refreshAll($, quiet) {
     const ctx = (await read($, view)).context
     await update($, data, d => (d.loadedFor === ctx ? d : { ...d, nodes: {}, children: {}, errors: {}, loadedFor: ctx }))
     await syncStatus($)
-    await refreshTab($, true)
+    await refreshTab($, true, !quiet)
   })
 }
 
@@ -1212,7 +1484,8 @@ function toolLine(e) {
 /** After a refresh: a facepalm and a line for a problem the pane had not shown before. @param {Engine} $ @param {string} ctx */
 async function noticeProblems($, ctx) {
   const d = await read($, data)
-  const errs = Object.values(d.nodes).filter(n => n.status === 'err')
+  // things that break: workloads and apps (not posture checks or incidents)
+  const errs = Object.values(d.nodes).filter(n => n.status === 'err' && (n.tab === 'cluster' || n.tab === 'argo'))
   if (steve.seenFor !== ctx || !steve.seen) {
     steve.seen = new Set(errs.map(n => n.id))
     steve.seenFor = ctx
@@ -1225,16 +1498,247 @@ async function noticeProblems($, ctx) {
   await say($, fresh.length === 1 ? steveLine('broke', salty, { x }) : steveLine('brokeMany', salty, { x, n: fresh.length - 1 }), { mood: 'oops', moodMs: 2000 })
 }
 
+// ---------- monitoring ----------
+//
+// While on, every monitorEverySeconds it runs rca_collect on the watched
+// contexts. k8sh records each run in its RCA history and says what opened
+// and what resolved since the last one: those become alerts (a toast, Steve,
+// the Incidents tab) and notes on the active incidents that name the object.
+// Off by default; the Incidents tab switches it. Read-only, like the rest.
+
+/** @typedef {{ context: string, ns: string, object: string, signal: string, severity: number, detail: string, at: number, open: boolean }} Alert */
+/** newest first, this session only @type {Alert[]} */
+const alerts = []
+const monitor = {
+  /** @type {{ cancel: () => void } | null} */
+  timer: null,
+  running: false,
+  /** contexts the last run could not reach */
+  unreachable: /** @type {Set<string>} */ (new Set()),
+  /** contexts whose first run this session is done: that run is the baseline */
+  baselined: /** @type {Set<string>} */ (new Set()),
+}
+let monitorMs = 60000
+let monitorContexts = 'current'
+
+const monitorScope = () => (monitorContexts === 'current' ? 'the current context' : monitorContexts === 'all' ? 'every context' : monitorContexts)
+
+/** @param {Engine} $ @returns {Promise<string[]>} */
+async function watched($) {
+  if (monitorContexts === 'all') return (await loadContexts($)).map(c => c.name).slice(0, 10)
+  if (monitorContexts !== 'current')
+    return monitorContexts
+      .split(',')
+      .map(c => c.trim())
+      .filter(Boolean)
+      .slice(0, 10)
+  const ctx = (await read($, view)).context ?? (await loadContexts($)).find(c => c.current)?.name
+  return ctx ? [ctx] : []
+}
+
+/** @param {Engine} $ */
+function startMonitor($) {
+  if (monitor.timer) return
+  monitor.timer = $.clock.every(monitorMs, () => {
+    void monitorTick($)
+  })
+  $.clock.after(1, () => {
+    void monitorTick($)
+  })
+}
+
+function stopMonitor() {
+  monitor.timer?.cancel()
+  monitor.timer = null
+}
+
+/** @param {string} context @param {unknown} x @param {boolean} open @returns {Alert} */
+const toAlert = (context, x, open) => ({ context, ns: str(x, 'namespace'), object: str(x, 'object'), signal: str(x, 'signal'), severity: num(x, 'severity'), detail: str(x, 'detail'), at: Date.now(), open })
+
+/**
+ * Whether an incident's object names what an alert is about: the object
+ * itself or its pod (pod/api-2 for pod/api-2/app), or the workload whose
+ * pods it names (deployment/api for pod/api-7d9-x).
+ * @param {string} o @param {Alert} a
+ */
+function names(o, a) {
+  const bare = o.replace(/^[^/]+\/(?=(pod|deployment|statefulset|daemonset|job|namespace)\/)/, '')
+  const full = `${a.ns}/${a.object}`
+  if (a.object === bare || a.object.startsWith(bare + '/') || full === o || full.startsWith(o + '/')) return true
+  const w = /^(deployment|statefulset|daemonset|job)\/(.+)$/.exec(bare)
+  return Boolean(w && a.object.startsWith(`pod/${w[2]}-`))
+}
+
+/** One monitoring run. @param {Engine} $ */
+async function monitorTick($) {
+  if (monitor.running) return
+  monitor.running = true
+  try {
+    /** @type {Alert[]} */
+    const fresh = []
+    /** @type {Alert[]} */
+    const gone = []
+    for (const ctx of await watched($)) {
+      let r
+      try {
+        r = await callJSON($, 'rca_collect', { context: ctx })
+      } catch (err) {
+        if (!monitor.unreachable.has(ctx)) {
+          monitor.unreachable.add(ctx)
+          fresh.push({ context: ctx, ns: '', object: 'cluster', signal: 'Unreachable', severity: 9, detail: msg(err), at: Date.now(), open: true })
+        }
+        continue
+      }
+      if (monitor.unreachable.delete(ctx)) gone.push({ context: ctx, ns: '', object: 'cluster', signal: 'Unreachable', severity: 9, detail: 'reachable again', at: Date.now(), open: false })
+      // the first run of a session is the baseline: what is broken already is
+      // said once, in one line; alerts are for what changes from here
+      if (!monitor.baselined.has(ctx)) {
+        monitor.baselined.add(ctx)
+        const now = list(dig(r, 'findings')).filter(x => num(x, 'severity') >= 7).length + num(r, 'truncated')
+        $.ui.toast(`◉ monitoring ${ctx}: ${now} problem${now === 1 ? '' : 's'} open now (RCA tab). You'll hear about changes from here.`)
+        continue
+      }
+      for (const x of list(dig(r, 'opened'))) if (num(x, 'severity') >= 7) fresh.push(toAlert(ctx, x, true))
+      for (const x of list(dig(r, 'resolved'))) if (num(x, 'severity') >= 7) gone.push(toAlert(ctx, x, false))
+    }
+    if (fresh.length === 0 && gone.length === 0) return
+    alerts.unshift(...fresh, ...gone)
+    if (alerts.length > 200) alerts.length = 200
+
+    const where = (/** @type {Alert} */ a) => `${a.context}: ${a.signal} ${a.ns ? a.ns + '/' : ''}${a.object}`
+    if (fresh.length > 0) {
+      $.ui.toast(fresh.length === 1 ? `✖ ${where(fresh[0])}` : `✖ ${fresh.length} new problems — ${where(fresh[0])}, …`, { timeoutMs: 8000 })
+      if (fxTimer && fxLook === 'steve') await say($, steveLine('broke', salty, { x: `${fresh[0].ns ? fresh[0].ns + '/' : ''}${fresh[0].object}` }), { mood: 'oops', moodMs: 2000 })
+    } else {
+      $.ui.toast(gone.length === 1 ? `✔ resolved — ${where(gone[0])}` : `✔ ${gone.length} problems resolved — ${where(gone[0])}, …`)
+    }
+
+    // on the timeline of every active incident that names the object
+    const active = list(await callJSON($, 'incident_list', { status: 'active' }).catch(() => []))
+    for (const a of [...fresh, ...gone]) {
+      for (const inc of active) {
+        if (str(inc, 'context') && str(inc, 'context') !== a.context) continue
+        if (!list(dig(inc, 'objects')).some(o => names(String(o), a))) continue
+        await callJSON($, 'incident_note', { id: str(inc, 'id'), text: `${a.open ? 'alert' : 'resolved'}: ${a.signal} on ${a.ns ? a.ns + '/' : ''}${a.object}`, kind: 'alert', by: 'monitor' }).catch(() => null)
+      }
+    }
+    if (timer && (await read($, view)).tab === 'incidents') await refreshTab($, true, true)
+  } finally {
+    monitor.running = false
+  }
+}
+
+/** @param {Engine} $ */
+async function toggleMonitor($) {
+  const on = !(await read($, view)).monitor
+  await update($, view, w => ({ ...w, monitor: on }))
+  if (on) startMonitor($)
+  else stopMonitor()
+  await notify($, on ? `Monitoring ${monitorScope()} every ${Math.round(monitorMs / 1000)} s: new and resolved problems show here, as a toast, and on matching incidents.` : 'Monitoring off.')
+  await syncStatus($)
+  if ((await read($, view)).tab === 'incidents') await refreshTab($, true, true)
+}
+
+// ---------- incidents ----------
+
+/** What an incident about a row names. @param {K8sNode} n */
+function incidentObjects(n) {
+  if (n.kind === 'Context') return ['context/' + n.name]
+  if (n.kind === 'Finding' || n.kind === 'Alert') return [n.ns ? `${n.ns}/${n.name}` : n.name]
+  if (n.kind === 'Namespace') return ['namespace/' + n.name]
+  if (n.kind === 'Container') return [`${n.ns}/pod/${n.pod}`]
+  if (isObject(n)) return [`${n.ns ? n.ns + '/' : ''}${targetOf(n)}`]
+  return []
+}
+
+/** A title from the row. @param {K8sNode} n */
+const incidentTitle = n => cut(n.label.replace(/\s+/g, ' ').trim(), 120)
+
+/** @param {Engine} $ @param {K8sNode} n */
+async function openIncidentForm($, n) {
+  /** @type {import('../types').K8sForm} */
+  const form = { kind: 'open', nodeId: n.id, severity: n.status === 'err' ? 'sev2' : 'sev3' }
+  await update($, view, w => ({ ...w, unlock: null, detail: null, form }))
+}
+
+/** @param {Engine} $ @param {K8sNode} n */
+async function openNoteForm($, n) {
+  /** @type {import('../types').K8sForm} */
+  const form = { kind: 'note', nodeId: n.id }
+  await update($, view, w => ({ ...w, unlock: null, detail: null, form }))
+}
+
+/** @param {Engine} $ @param {string} typed */
+async function submitIncident($, typed) {
+  const v = await read($, view)
+  const d = await read($, data)
+  const f = v.form
+  const n = f ? d.nodes[f.nodeId] : undefined
+  if (!f || !n) return
+  const setF = /** @param {Partial<import('../types').K8sForm>} patch */ patch => update($, view, w => (w.form && w.form.nodeId === f.nodeId ? { ...w, form: { ...w.form, ...patch } } : w))
+  await setF({ isBusy: true, error: undefined })
+  try {
+    if (f.kind === 'open') {
+      const inc = await callJSON($, 'incident_open', {
+        title: typed.trim() || incidentTitle(n),
+        severity: f.severity ?? 'sev3',
+        context: n.context ?? v.context ?? '',
+        namespace: n.ns,
+        objects: incidentObjects(n).join(','),
+        note: n.detail.filter(Boolean).slice(0, 4).join(' · '),
+        by: 'pane',
+      })
+      await update($, view, w => ({ ...w, form: null, notice: { text: `${str(inc, 'id')} opened (${str(inc, 'severity')}): ${str(inc, 'title')}. It is on the Incidents tab (7).`, isError: false } }))
+    } else {
+      if (!typed.trim()) return void (await setF({ isBusy: false, error: 'Write a note first.' }))
+      await callJSON($, 'incident_note', { id: n.name, text: typed, by: 'pane' })
+      await update($, view, w => ({ ...w, form: null, notice: { text: `Noted on ${n.name}.`, isError: false } }))
+    }
+  } catch (err) {
+    await setF({ isBusy: false, error: msg(err) })
+    return
+  }
+  if (v.tab === 'incidents') await refreshTab($, true, true)
+}
+
+/** @param {Engine} $ @param {K8sNode} n @param {'open' | 'mitigated' | 'resolved'} status */
+async function setIncident($, n, status) {
+  try {
+    await callJSON($, 'incident_status', { id: n.name, status, by: 'pane' })
+    await notify($, `${n.name} is ${status}.`)
+  } catch (err) {
+    await notify($, msg(err), true)
+  }
+  await refreshTab($, true, true)
+}
+
+/** Ask Claude for a blameless postmortem of an incident. @param {Engine} $ @param {K8sNode} n */
+async function postmortem($, n) {
+  const text = [
+    `From the k8s pane: draft a blameless postmortem for incident ${n.name} as markdown in docs/incidents/${n.name}.md.`,
+    `Use incident_list for its timeline, rca_history for when the problems started, came back and resolved, and the Argo CD and Git history for what changed.`,
+    'Sections: summary, impact, timeline (UTC), root cause, contributing factors, what went well, what went badly, action items (each as a PR or issue to open). Read-only: change nothing in the cluster.',
+    '',
+    ...n.detail,
+  ].join('\n')
+  const redacted = await $.session.redact(text).catch(() => text)
+  await $.prompt.submit({ text: cut(redacted, 6000), asUser: true })
+  await notify($, `Asked Claude for a postmortem of ${n.name}.`)
+}
+
 /** The light refresh: the visible tab and the lock, only while the pane is open. @param {Engine} $ */
 async function tick($) {
   if (ticking) return
   ticking = true
   try {
     if (!(await isOpen($))) return stopTimer()
-    const grants = await loadGrants($).catch(() => null)
-    if (grants) {
-      await update($, data, d => ({ ...d, grants }))
-      await syncStatus($)
+    // the Lock tab loads the grants itself
+    if ((await read($, view)).tab !== 'lock') {
+      const grants = await loadGrants($).catch(() => null)
+      if (grants) {
+        await update($, data, d => ({ ...d, grants }))
+        await syncStatus($)
+      }
     }
     await refreshTab($, true)
   } finally {
@@ -1297,7 +1801,9 @@ async function jumpTo($, id) {
 
 /** @param {Engine} $ @param {K8sTab} tab */
 async function switchTab($, tab) {
-  await update($, view, v => ({ ...v, tab, selected: null, detail: null, unlock: null, notice: null }))
+  // the Incidents tab opens with its alerts and active incidents unfolded
+  const unfold = tab === 'incidents' ? ['incidents/alerts', 'incidents/active'] : []
+  await update($, view, v => ({ ...v, tab, selected: null, detail: null, unlock: null, form: null, notice: null, expanded: [...new Set([...v.expanded, ...unfold])] }))
   await refreshTab($, false)
 }
 
@@ -1316,7 +1822,7 @@ const isPodish = n => n.kind === 'Pod' || n.kind === 'Container'
 /** @param {K8sNode} n */
 const isWorkload = n => WORKLOADS.includes(n.kind)
 /** @param {K8sNode} n */
-const isObject = n => n.name !== '' && !['Info', 'Finding', 'Event', 'Grant', 'Context', 'Lock'].includes(n.kind)
+const isObject = n => n.name !== '' && !['Info', 'Finding', 'Event', 'Grant', 'Context', 'Lock', 'Alert', 'Check', 'Incident', 'History'].includes(n.kind)
 
 /** @param {K8sNode} n @returns {('delete' | 'scale-zero')[]} */
 function unlockActions(n) {
@@ -1732,6 +2238,31 @@ async function draw($, e) {
     h(Button, { key: 'act:refresh', label: '⟳ Refresh', onPress: () => refreshAll($, false) }),
   )
   if (sel && ctx && unlockActions(sel).length > 0) acts.push(h(Button, { key: 'act:unlock', label: 'Unlock…', onPress: () => openUnlock($, sel) }))
+  // fleet: show a context in the other tabs
+  if (sel?.kind === 'Context' && sel.context) {
+    const target = sel.context
+    acts.push(
+      h(Button, {
+        key: 'act:switch',
+        label: 'Switch to',
+        onPress: async () => {
+          await switchContext($, target)
+          await switchTab($, 'cluster')
+        },
+      }),
+    )
+  }
+  // incidents: from any problem row; on an incident, its life cycle
+  if (sel && sel.kind !== 'Incident' && (sel.status === 'err' || sel.status === 'warn') && v.tab !== 'lock') acts.push(h(Button, { key: 'act:incident', label: 'Open incident…', onPress: () => openIncidentForm($, sel) }))
+  if (sel?.kind === 'Incident') {
+    const status = sel.status === 'err' ? 'open' : sel.status === 'warn' ? 'mitigated' : 'resolved'
+    acts.push(h(Button, { key: 'act:note', label: 'Note…', onPress: () => openNoteForm($, sel) }))
+    if (status === 'open') acts.push(h(Button, { key: 'act:mitigate', label: 'Mitigated', onPress: () => setIncident($, sel, 'mitigated') }))
+    if (status !== 'resolved') acts.push(h(Button, { key: 'act:resolve', label: 'Resolve', onPress: () => setIncident($, sel, 'resolved') }))
+    else acts.push(h(Button, { key: 'act:reopen', label: 'Reopen', onPress: () => setIncident($, sel, 'open') }))
+    acts.push(h(Button, { key: 'act:postmortem', label: 'Draft postmortem', onPress: () => postmortem($, sel) }))
+  }
+  if (v.tab === 'incidents') acts.push(h(Button, { key: 'act:monitor', label: monitor.timer ? '◉ Monitoring on' : '○ Monitoring off', variant: monitor.timer ? 'primary' : undefined, onPress: () => toggleMonitor($) }))
   out.push(h(Box, { flexDirection: 'row', flexWrap: 'wrap', columnGap: 1 }, ...acts))
 
   // 5. tree; while a detail or the unlock is open, only the rows around the
@@ -1793,7 +2324,46 @@ async function draw($, e) {
 
   // 6. detail
   out.push(h(Text, { dimColor: true }, '─'.repeat(Math.min(cols, 120))))
-  if (v.unlock && sel && v.unlock.nodeId === sel.id && ctx) {
+  if (v.form && sel && v.form.nodeId === sel.id) {
+    const f = v.form
+    const isOpen = f.kind === 'open'
+    out.push(
+      h(
+        Box,
+        { flexDirection: 'column' },
+        h(Text, { bold: true }, isOpen ? `Open an incident — ${sel.context ?? ctx ?? ''}` : `Note on ${sel.name}`),
+        isOpen ? h(Text, { dimColor: true }, `about: ${incidentObjects(sel).join(', ') || sel.label.trim()}`) : null,
+        isOpen
+          ? h(
+              Box,
+              { flexDirection: 'row', columnGap: 2 },
+              h(Text, null, 'severity:'),
+              ...['sev1', 'sev2', 'sev3', 'sev4'].map(s =>
+                h(Button, {
+                  key: 'sev:' + s,
+                  label: s,
+                  plain: true,
+                  dimColor: s !== f.severity,
+                  onPress: () => update($, view, w => (w.form ? { ...w, form: { ...w.form, severity: /** @type {'sev1' | 'sev2' | 'sev3' | 'sev4'} */ (s) } } : w)),
+                }),
+              ),
+            )
+          : null,
+        f.isBusy
+          ? h(Text, { dimColor: true }, isOpen ? 'opening…' : 'saving…')
+          : h(Input, {
+              key: isOpen ? 'incident-title' : 'incident-note',
+              placeholder: isOpen ? cut(incidentTitle(sel), 60) + ' (Enter keeps it)' : 'what happened, what you did',
+              submitLabel: isOpen ? 'open' : 'note',
+              autoFocus: true,
+              onSubmit: (/** @type {string} */ typed) => submitIncident($, typed),
+            }),
+        f.error ? h(Text, { color: 'error' }, '✖ ' + f.error) : null,
+        h(Text, { dimColor: true }, isOpen ? 'Kept on this machine by k8sh (~/.k8sh/incidents.json), redacted. Nothing changes in the cluster.' : 'Added to the timeline, redacted.'),
+        h(Button, { key: 'form-cancel', label: 'Cancel', onPress: () => update($, view, w => ({ ...w, form: null })) }),
+      ),
+    )
+  } else if (v.unlock && sel && v.unlock.nodeId === sel.id && ctx) {
     const u = v.unlock
     const choices = unlockActions(sel)
     out.push(
@@ -1892,6 +2462,8 @@ export function register(on, options) {
   if (typeof options?.steveWhisperModel === 'string' && options.steveWhisperModel) whisperSetting = options.steveWhisperModel
   if (typeof options?.steveHearingSends === 'boolean') hearingSends = options.steveHearingSends
   readsAnswers = options?.steveReadsAnswers === true
+  if (typeof options?.monitorContexts === 'string' && options.monitorContexts.trim()) monitorContexts = options.monitorContexts.trim()
+  if (typeof options?.monitorEverySeconds === 'number') monitorMs = Math.max(30, Math.min(3600, options.monitorEverySeconds)) * 1000
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -1901,7 +2473,9 @@ export function register(on, options) {
     })
     await loadLabel($)
     void pickVoice($)
-    await update($, view, v => ({ ...v, busy: 0, unlock: v.unlock ? { ...v.unlock, isBusy: false } : null, ear: undefined }))
+    await update($, view, v => ({ ...v, busy: 0, unlock: v.unlock ? { ...v.unlock, isBusy: false } : null, ear: undefined, form: v.form ? { ...v.form, isBusy: false } : null }))
+    // monitoring switched on in this session carries over a reload
+    if ((await read($, view)).monitor) startMonitor($)
     if (await isOpen($)) {
       startTimer($)
       $.clock.after(1, () => {

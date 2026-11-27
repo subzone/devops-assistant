@@ -71,6 +71,17 @@ const migrate = {
 }
 
 type Call = { server: string; tool: string; args: Record<string, unknown> }
+type Incident = {
+  id: string
+  title: string
+  severity: string
+  status: string
+  context: string
+  namespace: string
+  objects: string[]
+  openedAt: string
+  timeline: { at: string; by: string; kind: string; text: string }[]
+}
 type Run = { argv: readonly string[]; init?: { stdin?: string } }
 
 type World = {
@@ -108,10 +119,18 @@ type World = {
   speechRuns: (readonly string[])[]
   /** text put in the prompt box */
   filled: string[]
+  /** k8sh's incident store */
+  incidents: Incident[]
+  /** RCA history records */
+  history: unknown[]
+  /** problems the next rca_collect reports as opened / resolved */
+  opened: unknown[]
+  resolved: unknown[]
+  toasts: string[]
 }
 
 function world(on: On): World {
-  const w: World = { calls: [], runs: [], submitted: [], status: { text: undefined }, closed: 0, grants: [], argoInstalled: true, blits: [], spoken: [], voices: [], asked: [], quip: '"Of course it got OOMKilled. Who the hell set that memory limit?"', installed: 'Fred                en_US    # Hello! My name is Fred.\nRocko (English (US)) en_US    # Hello! My name is Rocko.\n', pods: [pod('api-1', '', 0, ''), pod('api-2', 'CrashLoopBackOff', 7, 'OOMKilled')], bins: {}, exists: false, recorded: 64000, mic: [], transcript: '', piped: [], spawned: [], speechRuns: [], filled: [] }
+  const w: World = { calls: [], runs: [], submitted: [], status: { text: undefined }, closed: 0, grants: [], argoInstalled: true, blits: [], spoken: [], voices: [], asked: [], quip: '"Of course it got OOMKilled. Who the hell set that memory limit?"', installed: 'Fred                en_US    # Hello! My name is Fred.\nRocko (English (US)) en_US    # Hello! My name is Rocko.\n', pods: [pod('api-1', '', 0, ''), pod('api-2', 'CrashLoopBackOff', 7, 'OOMKilled')], bins: {}, exists: false, recorded: 64000, mic: [], transcript: '', piped: [], spawned: [], speechRuns: [], filled: [], incidents: [], history: [], opened: [], resolved: [], toasts: [] }
   let open = false
 
   on('command.register', (_, e) => ({ value: { command: e.name } }))
@@ -132,6 +151,10 @@ function world(on: On): World {
   on('ui.blit', (_, e) => {
     w.blits.push(e as World['blits'][number])
     return { value: {} }
+  })
+  on('ui.toast', (_, e) => {
+    w.toasts.push(e.text)
+    return { value: undefined }
   })
   // models and recordings; programs are found through `command -v` (w.bins)
   on('fs.exists', (_, e) => ({ value: w.exists && !/\/(piper|ffmpeg|whisper-cli)$/.test(e.path) }))
@@ -221,11 +244,56 @@ function world(on: On): World {
         return text({ app: { name: a.name }, resources: [{ kind: 'Deployment', name: 'api', namespace: 'payments', sync: 'Synced', health: 'Degraded', message: 'progress deadline exceeded' }] })
       case 'rca_collect':
         return text({
-          context: CTX,
+          context: a.context ?? CTX,
           findings: [{ severity: 9, object: 'pod/api-2/app', signal: 'CrashLoopBackOff', detail: 'back-off (image ghcr.io/acme/api:1.4.2)' }],
           recentWarnings: [{ type: 'Warning', reason: 'BackOff', object: 'payments/Pod/api-2', message: 'Back-off', count: 12, last: '2026-11-26T10:00:00Z' }],
           hint: 'correlate',
+          // what opened and resolved since the last collection (the monitor's alerts)
+          opened: w.opened.splice(0),
+          resolved: w.resolved.splice(0),
         })
+      case 'rca_history':
+        return text(w.history)
+      case 'fleet_status':
+        return text([
+          { context: 'eks-prod', tier: 'prod', reachable: true, nodes: 3, nodesReady: 3, pods: 40, podsFailing: 0, podsNotReady: 0, warnings15m: 0, argoInstalled: true, argoApps: 4, argoDegraded: 0, argoOutOfSync: 0, topProblems: [] },
+          { context: CTX, tier: 'dev', reachable: true, nodes: 3, nodesReady: 2, pods: 12, podsFailing: 2, podsNotReady: 1, warnings15m: 5, argoInstalled: true, argoApps: 2, argoDegraded: 1, argoOutOfSync: 0, topProblems: ['node/k3d-agent-2: NotReady', 'payments/pod/api-2: CrashLoopBackOff'] },
+        ])
+      case 'security_overview':
+        return text({
+          context: a.context,
+          summary: { high: 1, medium: 1, low: 0 },
+          checks: [
+            { id: 'privileged', title: 'privileged containers', severity: 'high', count: 1, objects: ['payments/deployment/api'], advice: 'Drop privileged: true.' },
+            { id: 'no-network-policy', title: 'namespaces without a NetworkPolicy', severity: 'medium', count: 1, objects: ['payments/namespace/payments'], advice: 'Add a default-deny policy.' },
+          ],
+          note: 'Read-only posture checks.',
+        })
+      case 'incident_list':
+        return text(a.status === 'active' ? w.incidents.filter(i => i.status !== 'resolved') : w.incidents)
+      case 'incident_open': {
+        const inc: Incident = {
+          id: `INC-${w.incidents.length + 1}`,
+          title: String(a.title),
+          severity: String(a.severity),
+          status: 'open',
+          context: String(a.context ?? ''),
+          namespace: String(a.namespace ?? ''),
+          objects: String(a.objects ?? '').split(',').filter(Boolean),
+          openedAt: new Date().toISOString(),
+          timeline: [{ at: new Date().toISOString(), by: String(a.by), kind: 'opened', text: 'opened: ' + a.title }],
+        }
+        w.incidents.unshift(inc)
+        return text(inc)
+      }
+      case 'incident_note':
+      case 'incident_status': {
+        const inc = w.incidents.find(i => i.id === a.id)
+        if (!inc) return fail('no incident ' + a.id)
+        if (e.tool === 'incident_status') inc.status = String(a.status)
+        inc.timeline.push({ at: new Date().toISOString(), by: String(a.by), kind: e.tool === 'incident_status' ? 'status' : String(a.kind ?? 'note'), text: String(a.text ?? a.status) })
+        return text(inc)
+      }
     }
     return fail('unknown tool ' + e.tool)
   })
@@ -771,6 +839,150 @@ test('Steve speaks with Piper when it is installed, and hears you through whispe
   w.recorded = 100
   await ui.press({ key: 'talk' })
   expect(w.filled).toHaveLength(1)
+  await ui.unmount()
+})
+
+test('Fleet: every context at a glance, troubled first; Switch to; the background refresh spares it', async ($, on) => {
+  const { w, clock, ui } = await openPane($, on)
+  await ui.press({ key: 'tab:fleet' })
+  expect((await ui.find({ key: 'tab:fleet' }))?.props.hotkey).toBe('5')
+  const order = (await ui.findAll({ type: 'Button' })).map(b => b.key ?? '').filter(k => k.startsWith('row:fleet/ctx:'))
+  expect(order).toEqual(['row:fleet/ctx:' + CTX, 'row:fleet/ctx:eks-prod'])
+  const mine = (await row(ui, 'fleet/ctx:' + CTX))?.text
+  expect(mine).toContain('✖ k3d-mycluster [dev]  pods ✖2 ⚠1  nodes 2/3  argo ✖1 ⚠0')
+  await ui.press({ key: 'row:fleet/ctx:' + CTX })
+  expect(await ui.find({ type: 'Text', text: 'warning events, last 15 min: 5' })).toBeDefined()
+  await ui.press({ key: 'row:fleet/ctx:' + CTX })
+  expect((await row(ui, 'fleet/ctx:eks-prod'))?.text).toContain('pods ✔40  nodes 3/3  argo ✔')
+  await ui.press({ key: 'row:fleet/ctx:' + CTX })
+  await ui.press({ key: 'row:fleet/ctx:' + CTX })
+  expect((await row(ui, `fleet/ctx:${CTX}/p:0`))?.text).toContain('node/k3d-agent-2: NotReady')
+  await ui.press({ key: 'row:fleet/ctx:' + CTX })
+
+  // cluster-wide: the 15 s refresh doesn't reload it; ⟳ does
+  const n = tool(w, 'fleet_status').length
+  await clock.advance(15000)
+  expect(tool(w, 'fleet_status').length).toBe(n)
+  await ui.press({ key: 'act:refresh' })
+  expect(tool(w, 'fleet_status').length).toBe(n + 1)
+
+  // Switch to: that context, in the Cluster tab
+  await ui.press({ key: 'row:fleet/ctx:eks-prod' })
+  await ui.press({ key: 'act:switch' })
+  expect(await ui.find({ key: 'tab:cluster' })).toBeDefined()
+  expect(tool(w, 'k8s_get').at(-1)?.args.context).toBe('eks-prod')
+  await ui.unmount()
+})
+
+test('Security: checks worst first, each listing the workloads that break it, ready for Describe', async ($, on) => {
+  const { w, ui } = await openPane($, on)
+  await ui.press({ key: 'tab:security' })
+  expect(tool(w, 'security_overview')[0]?.args).toMatchObject({ context: CTX })
+  expect((await row(ui, 'security/summary'))?.text).toContain('checks failing: 1 high · 1 medium · 0 low')
+  expect((await row(ui, 'security/check:privileged'))?.text).toContain('HIGH  privileged containers (1)')
+  await ui.press({ key: 'row:security/check:privileged' })
+  await ui.press({ key: 'row:security/check:privileged' })
+  const obj = 'security/check:privileged/o:payments/deployment/api'
+  expect((await row(ui, obj))?.text).toContain('payments/deployment/api')
+  await ui.press({ key: 'row:' + obj })
+  await ui.press({ key: 'act:describe' })
+  expect(tool(w, 'k8s_describe').at(-1)?.args).toMatchObject({ kind: 'Deployment', name: 'api', namespace: 'payments' })
+  await ui.unmount()
+})
+
+test('RCA history: open and resolved problems of the last 7 days in the RCA tab', async ($, on) => {
+  const { w, ui } = await openPane($, on)
+  w.history = [
+    { context: CTX, namespace: 'payments', object: 'pod/api-2/app', signal: 'CrashLoopBackOff', severity: 9, firstSeen: ago(3 * 3600e3), lastSeen: ago(0), seen: 40, times: 2, detail: 'back-off' },
+    { context: CTX, namespace: 'payments', object: 'pod/api-1/app', signal: 'OOMKilled', severity: 9, firstSeen: ago(26 * 3600e3), lastSeen: ago(25 * 3600e3), seen: 3, times: 1, resolvedAt: ago(25 * 3600e3) },
+  ]
+  await ui.press({ key: 'tab:rca' })
+  expect(tool(w, 'rca_history')[0]?.args).toMatchObject({ context: CTX, days: 7 })
+  expect((await row(ui, 'rca/history'))?.text).toContain('history, 7 days: 1 open · 1 resolved')
+  await ui.press({ key: 'row:rca/history' })
+  await ui.press({ key: 'row:rca/history' })
+  expect((await row(ui, 'rca/history/r:0'))?.text).toContain('✖ open  CrashLoopBackOff  payments/pod/api-2/app  since 3h ago')
+  await ui.press({ key: 'row:rca/history/r:0' })
+  expect(await ui.find({ type: 'Text', text: 'occurrences: 2, seen in 40 collections' })).toBeDefined()
+  expect((await row(ui, 'rca/history/r:1'))?.text).toContain('resolved 25h ago  OOMKilled  payments/pod/api-1/app')
+  await ui.unmount()
+})
+
+test('Incidents: open one from a problem row, note it, mitigate, resolve, ask for a postmortem', async ($, on) => {
+  const { w, ui } = await openPane($, on)
+  for (const id of [NS, NS, DEPLOY, DEPLOY, POD]) await ui.press({ key: 'row:' + id })
+  await ui.press({ key: 'act:incident' })
+  await ui.press({ key: 'sev:sev1' })
+  await ui.input({ key: 'incident-title', text: 'api-2 down' })
+  expect(w.incidents[0]).toMatchObject({ id: 'INC-1', title: 'api-2 down', severity: 'sev1', context: CTX, namespace: 'payments', objects: ['payments/pod/api-2'] })
+  expect(w.incidents[0].timeline[0].by).toBe('pane')
+  expect(await ui.find({ type: 'Text', text: /INC-1 opened \(sev1\)/ })).toBeDefined()
+
+  // the Incidents tab opens with the active ones unfolded
+  await ui.press({ key: 'tab:incidents' })
+  const inc = 'incidents/active/inc:INC-1'
+  expect((await row(ui, inc))?.text).toContain('INC-1 sev1 open  api-2 down')
+  await ui.press({ key: 'row:' + inc })
+  await ui.press({ key: 'act:note' })
+  await ui.input({ key: 'incident-note', text: 'raised the memory limit in PR #12' })
+  expect(w.incidents[0].timeline.at(-1)).toMatchObject({ by: 'pane', kind: 'note', text: 'raised the memory limit in PR #12' })
+
+  await ui.press({ key: 'row:' + inc })
+  await ui.press({ key: 'act:mitigate' })
+  expect(w.incidents[0].status).toBe('mitigated')
+  await ui.press({ key: 'row:' + inc })
+  await ui.press({ key: 'act:resolve' })
+  expect(w.incidents[0].status).toBe('resolved')
+  const done = 'incidents/resolved/inc:INC-1'
+  await ui.press({ key: 'row:incidents/resolved' })
+  await ui.press({ key: 'row:incidents/resolved' })
+  await ui.press({ key: 'row:' + done })
+  expect(await ui.find({ key: 'act:reopen' })).toBeDefined()
+  await ui.press({ key: 'act:postmortem' })
+  expect(w.submitted.at(-1)?.text).toContain('blameless postmortem for incident INC-1')
+  expect(w.submitted.at(-1)?.origin?.asUser).toBe(true)
+  await ui.unmount()
+})
+
+test('Monitoring: off by default; on, it alerts new and resolved problems and notes them on matching incidents', async ($, on) => {
+  const { w, clock, ui } = await openPane($, on)
+  await ui.press({ key: 'tab:incidents' })
+  expect((await ui.find({ key: 'act:monitor' }))?.text).toContain('Monitoring off')
+  const before = tool(w, 'rca_collect').length
+  await clock.advance(120000)
+  expect(tool(w, 'rca_collect').length).toBe(before)
+
+  w.incidents.push({ id: 'INC-7', title: 'payments flaky', severity: 'sev2', status: 'open', context: CTX, namespace: 'payments', objects: ['payments/deployment/api'], openedAt: ago(60e3), timeline: [] })
+  // the first run is the baseline: one line about what is broken already, no alerts
+  w.opened = [{ context: CTX, namespace: 'payments', object: 'pod/api-9/app', signal: 'CrashLoopBackOff', severity: 9 }]
+  await ui.press({ key: 'act:monitor' })
+  for (let i = 0; i < 20 && w.toasts.length === 0; i++) await clock.advance(50)
+  expect(w.toasts[0]).toContain('◉ monitoring k3d-mycluster: 1 problem open now')
+  expect(w.status.text).toContain('◉ monitoring')
+  expect(w.incidents.find(i => i.id === 'INC-7')?.timeline).toEqual([])
+
+  // a new problem at the next run: an alert
+  w.toasts.length = 0
+  w.opened = [{ context: CTX, namespace: 'payments', object: 'pod/api-2/app', signal: 'CrashLoopBackOff', severity: 9, detail: 'back-off' }]
+  await clock.advance(60000)
+  for (let i = 0; i < 20 && w.toasts.length === 0; i++) await clock.advance(50)
+  expect(w.toasts[0]).toContain('✖ k3d-mycluster: CrashLoopBackOff payments/pod/api-2/app')
+  expect(w.incidents.find(i => i.id === 'INC-7')?.timeline.at(-1)).toMatchObject({ by: 'monitor', kind: 'alert', text: 'alert: CrashLoopBackOff on payments/pod/api-2/app' })
+  for (let i = 0; i < 20 && !(await row(ui, 'incidents/alerts/a:0')); i++) await clock.advance(50)
+  expect((await row(ui, 'incidents/alerts/a:0'))?.text).toContain('✖  k3d-mycluster  payments/pod/api-2/app  CrashLoopBackOff')
+
+  // resolved at the next run
+  w.resolved = [{ context: CTX, namespace: 'payments', object: 'pod/api-2/app', signal: 'CrashLoopBackOff', severity: 9 }]
+  await clock.advance(60000)
+  for (let i = 0; i < 20 && w.toasts.length < 2; i++) await clock.advance(50)
+  expect(w.toasts[1]).toContain('✔ resolved — k3d-mycluster: CrashLoopBackOff payments/pod/api-2/app')
+  expect(w.incidents.find(i => i.id === 'INC-7')?.timeline.at(-1)?.text).toBe('resolved: CrashLoopBackOff on payments/pod/api-2/app')
+
+  // off again: no more runs
+  await ui.press({ key: 'act:monitor' })
+  const runs = tool(w, 'rca_collect').length
+  await clock.advance(180000)
+  expect(tool(w, 'rca_collect').length).toBe(runs)
   await ui.unmount()
 })
 

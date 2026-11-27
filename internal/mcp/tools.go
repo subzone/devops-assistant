@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/subzone/devops-assistant/internal/audit"
 	"github.com/subzone/devops-assistant/internal/config"
 	"github.com/subzone/devops-assistant/internal/focus"
 	"github.com/subzone/devops-assistant/internal/grant"
+	"github.com/subzone/devops-assistant/internal/history"
+	"github.com/subzone/devops-assistant/internal/incident"
 	"github.com/subzone/devops-assistant/internal/kube"
 	"github.com/subzone/devops-assistant/internal/validate"
 )
@@ -28,7 +31,10 @@ Rules you must follow:
   ("k8sh unlock ..."). You cannot create grants. If a tool says LOCKED, show the user the exact
   unlock command it returns and stop. Never try to work around the lock.
 - Secret values are always redacted. Never ask for, print, or store credentials. Generate ExternalSecret, never Secret with data.
-- Run validate_manifests on anything you generate before proposing a PR.`
+- Run validate_manifests on anything you generate before proposing a PR.
+- rca_history says since when a problem exists and whether it happened before; fleet_status and
+  security_overview are read-only overviews. incident_* tools keep incidents on this machine
+  (title, severity, timeline); they never touch a cluster.`
 
 func scope(ctx context.Context, d Deps, a map[string]any) (kube.Scope, error) {
 	c, err := d.Kube.Resolve(ctx, S(a, "context"))
@@ -140,7 +146,124 @@ func Register(s *Server, d Deps) {
 			if err != nil {
 				return nil, err
 			}
-			return d.Kube.RCA(ctx, sc)
+			rep, err := d.Kube.RCA(ctx, sc)
+			if err != nil {
+				return nil, err
+			}
+			// every collection updates the history: what is new, what went away
+			found := make([]history.Signal, 0, len(rep.Findings))
+			for _, f := range rep.Findings {
+				found = append(found, history.Signal{Namespace: f.Namespace, Object: f.Object, Signal: f.Signal, Severity: f.Severity, Detail: f.Detail})
+			}
+			opened, resolved, herr := history.Update(d.Home, sc.Context, sc.Namespace, found, time.Now().UTC())
+			rep.Top(50)
+			out := struct {
+				*kube.RCAReport
+				Opened   []history.Record `json:"opened"`
+				Resolved []history.Record `json:"resolved"`
+				History  string           `json:"history,omitempty"`
+			}{RCAReport: rep, Opened: nonNil(opened), Resolved: nonNil(resolved)}
+			if herr != nil {
+				out.History = "not recorded: " + herr.Error()
+			}
+			return out, nil
+		})
+
+	s.Add(Tool{Name: "rca_history", Description: "RCA findings over time: when each problem was first and last seen, how many times it came back, and when it resolved. Open problems first. Every rca_collect records into it.",
+		InputSchema: Obj(map[string]any{"context": Str("kube context (default: current; \"*\" = every context)"), "namespace": Str("namespace (empty = all)"),
+			"days": Int("look back this many days, default 7, max 30"), "openOnly": Bool("only problems still open")}),
+		Annotations: ro("RCA history")},
+		func(ctx context.Context, a map[string]any) (any, error) {
+			kc := S(a, "context")
+			if kc == "*" {
+				kc = ""
+			} else {
+				var err error
+				if kc, err = d.Kube.Resolve(ctx, kc); err != nil {
+					return nil, err
+				}
+			}
+			days := I(a, "days", 7)
+			if days < 1 || days > 30 {
+				days = 7
+			}
+			return history.List(d.Home, kc, S(a, "namespace"), time.Now().Add(-time.Duration(days)*24*time.Hour), B(a, "openOnly", false))
+		})
+
+	s.Add(Tool{Name: "fleet_status", Description: "Every kube context at a glance, in parallel: reachable, nodes ready, failing and not-ready pods, warning events in the last 15 minutes, degraded/out-of-sync Argo CD apps, top problems.",
+		InputSchema: Obj(map[string]any{"contexts": Str("comma-separated contexts (default: all)")}),
+		Annotations: ro("Fleet status")},
+		func(ctx context.Context, a map[string]any) (any, error) {
+			cs := list(S(a, "contexts"))
+			if len(cs) == 0 {
+				all, _, err := d.Kube.Contexts(ctx)
+				if err != nil {
+					return nil, err
+				}
+				cs = all
+			}
+			if len(cs) > 30 {
+				cs = cs[:30]
+			}
+			type row struct {
+				kube.ClusterSummary
+				Tier config.Tier `json:"tier"`
+			}
+			out := []row{}
+			for _, s := range d.Kube.Fleet(ctx, cs, 25*time.Second) {
+				out = append(out, row{s, d.Config.TierOf(s.Context)})
+			}
+			return out, nil
+		})
+
+	s.Add(Tool{Name: "security_overview", Description: "Read-only security posture of a cluster or namespace: privileged containers, host namespaces and hostPath, dangerous capabilities, root, privilege escalation, unpinned images, missing memory limits, writable root filesystems, cluster-admin bindings, namespaces without NetworkPolicy. Grouped by check, worst first. Not a vulnerability scan.",
+		InputSchema: Obj(map[string]any{"context": ctxProp, "namespace": Str("namespace (empty = whole cluster)"), "includeSystem": Bool("include kube-system and the other system namespaces (default false)")}),
+		Annotations: ro("Security overview")},
+		func(ctx context.Context, a map[string]any) (any, error) {
+			sc, err := scope(ctx, d, a)
+			if err != nil {
+				return nil, err
+			}
+			return d.Kube.Security(ctx, sc, B(a, "includeSystem", false))
+		})
+
+	inc := incident.Store{Home: d.Home}
+	local := func(title string) Annotations { return Annotations{Title: title} }
+	byProp := Str("who: claude (default), pane or monitor")
+
+	s.Add(Tool{Name: "incident_list", Description: "Incidents kept on this machine, newest first, with their timelines.",
+		InputSchema: Obj(map[string]any{"status": Str("open, mitigated, resolved, active (open or mitigated), or empty for all")}),
+		Annotations: ro("List incidents")},
+		func(ctx context.Context, a map[string]any) (any, error) { return inc.List(S(a, "status")) })
+
+	s.Add(Tool{Name: "incident_open", Description: "Open an incident on this machine (a local record only; nothing changes in a cluster).",
+		InputSchema: Obj(map[string]any{"title": Str("what is wrong, short"), "severity": Str("sev1 (worst) .. sev4, default sev3"), "context": Str("kube context"),
+			"namespace": nsProp, "objects": Str("comma-separated objects involved, e.g. pod/api-2,deployment/api"), "note": Str("first timeline note"), "by": byProp}, "title"),
+		Annotations: local("Open incident")},
+		func(ctx context.Context, a map[string]any) (any, error) {
+			in, err := inc.Open(S(a, "title"), S(a, "severity"), S(a, "context"), S(a, "namespace"), list(S(a, "objects")), S(a, "note"), S(a, "by"))
+			if err == nil {
+				audit.Write(d.Home, audit.Record{Source: "mcp", Event: "incident_open", Outcome: "opened", Detail: map[string]any{"id": in.ID, "severity": in.Severity, "context": in.Context}})
+			}
+			return in, err
+		})
+
+	s.Add(Tool{Name: "incident_note", Description: "Add a note to an incident's timeline.",
+		InputSchema: Obj(map[string]any{"id": Str("incident id, e.g. INC-3"), "text": Str("the note"), "kind": Str("note (default) or alert"), "by": byProp}, "id", "text"),
+		Annotations: local("Note on incident")},
+		func(ctx context.Context, a map[string]any) (any, error) {
+			return inc.Note(S(a, "id"), S(a, "text"), S(a, "by"), S(a, "kind"))
+		})
+
+	s.Add(Tool{Name: "incident_status", Description: "Move an incident to open, mitigated or resolved, with an optional note.",
+		InputSchema: Obj(map[string]any{"id": Str("incident id"), "status": Str("open, mitigated or resolved"), "note": Str("why"), "by": byProp}, "id", "status"),
+		Annotations: local("Incident status")},
+		func(ctx context.Context, a map[string]any) (any, error) {
+			in, err := inc.SetStatus(S(a, "id"), S(a, "status"), S(a, "note"), S(a, "by"))
+			if err == nil {
+				audit.Write(d.Home, audit.Record{Source: "mcp", Event: "incident_status", Outcome: in.Status, Detail: map[string]any{"id": in.ID}})
+			}
+			return in, err
 		})
 
 	s.Add(Tool{Name: "validate_manifests", Description: "Run the validation pipeline on a file or directory. Kubernetes (kustomize/helm/plain, incl. Crossplane): render, secret scan, schema, lint, policy, security, crossplane validate, optional server dry-run. Terraform/OpenTofu dirs: secret scan, fmt, init -backend=false + validate, tflint, trivy, checkov, infracost estimate. Must pass before proposing a PR.",
@@ -217,4 +340,22 @@ func Register(s *Server, d Deps) {
 	}
 	destructive("destructive_delete", "delete", "Delete one resource (kind/name).", d.Kube.Delete)
 	destructive("destructive_scale_zero", "scale-zero", "Scale one workload to 0 replicas.", d.Kube.ScaleZero)
+}
+
+func nonNil(rs []history.Record) []history.Record {
+	if rs == nil {
+		return []history.Record{}
+	}
+	return rs
+}
+
+// list splits a comma-separated argument, dropping blanks.
+func list(s string) []string {
+	var out []string
+	for _, v := range strings.Split(s, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }

@@ -342,6 +342,7 @@ func (l *loader) rca(kctx string) ([]*node, error) {
 	if err != nil {
 		return nil, err
 	}
+	r.Top(50)
 	var out []*node
 	for _, f := range r.Findings {
 		st := stWarn

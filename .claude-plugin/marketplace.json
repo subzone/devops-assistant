@@ -9,7 +9,7 @@
       "name": "devops-assistant",
       "source": "./",
       "description": "GitOps-first Kubernetes operations with a destructive-action lock, secret redaction, validation and RCA.",
-      "version": "0.5.4"
+      "version": "0.6.0"
     }
   ]
 }

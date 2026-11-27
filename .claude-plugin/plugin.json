@@ -1,6 +1,6 @@
 {
   "name": "devops-assistant",
-  "version": "0.5.4",
+  "version": "0.6.0",
   "types": "./types/index.d.ts",
   "description": "GitOps-first Kubernetes operations for Claude: Argo CD/Workflows, Helm, Kustomize, RCA, validation and security gates, with a hard lock on destructive actions and zero credential exposure.",
   "author": {
@@ -48,6 +48,18 @@
       "title": "Send what Steve hears",
       "description": "Off: what you say goes into the prompt box for you to check and send. On: it is sent at once.",
       "default": false
+    },
+    "monitorContexts": {
+      "type": "string",
+      "title": "Monitoring: contexts",
+      "description": "What the monitor (Incidents tab → Monitoring on) watches: current (the pane's context), all (up to 10), or a comma-separated list of contexts.",
+      "default": "current"
+    },
+    "monitorEverySeconds": {
+      "type": "number",
+      "title": "Monitoring: every N seconds",
+      "description": "How often the monitor runs rca_collect on each watched context (30 to 3600). Each run reads pods and events of the whole cluster, so mind big clusters.",
+      "default": 60
     },
     "steveReadsAnswers": {
       "type": "boolean",
