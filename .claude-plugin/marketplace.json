@@ -1,5 +1,6 @@
 {
   "name": "subzone",
+  "description": "DevOps plugins for Claude Code: GitOps-first Kubernetes, cloud and on-prem operations with a hard lock on destructive actions.",
   "owner": {
     "name": "Milenko",
     "url": "https://github.com/subzone"
@@ -8,8 +9,8 @@
     {
       "name": "devops-assistant",
       "source": "./",
-      "description": "GitOps-first Kubernetes operations with a destructive-action lock, secret redaction, validation and RCA.",
-      "version": "0.6.0"
+      "description": "GitOps-first DevOps for Kubernetes, six clouds and on-prem: a live k8s pane, RCA and incidents, read-only security, inventory and cost analysis, infrastructure design, validation, a destructive-action lock and secret redaction.",
+      "version": "0.6.1"
     }
   ]
 }

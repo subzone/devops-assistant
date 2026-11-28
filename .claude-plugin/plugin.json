@@ -1,8 +1,8 @@
 {
   "name": "devops-assistant",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "types": "./types/index.d.ts",
-  "description": "GitOps-first Kubernetes operations for Claude: Argo CD/Workflows, Helm, Kustomize, RCA, validation and security gates, with a hard lock on destructive actions and zero credential exposure.",
+  "description": "GitOps-first DevOps for Kubernetes, six clouds and on-prem: a live k8s pane, RCA, monitoring and incidents, read-only security, inventory and cost analysis, infrastructure design, validation gates, a hard lock on destructive actions and zero credential exposure.",
   "author": {
     "name": "Milenko",
     "url": "https://github.com/subzone"
@@ -74,5 +74,5 @@
       "default": true
     }
   },
-  "keywords": ["terraform", "opentofu", "crossplane", "aws", "azure", "gcp", "hetzner", "digitalocean", "alibaba", "finops", "kubernetes", "gitops", "argocd", "argo-workflows", "helm", "kustomize", "rca", "devsecops", "aks", "eks", "gke"]
+  "keywords": ["devops", "on-prem", "vsphere", "proxmox", "opencost", "prowler", "incident-management", "terraform", "opentofu", "crossplane", "aws", "azure", "gcp", "hetzner", "digitalocean", "alibaba", "finops", "kubernetes", "gitops", "argocd", "argo-workflows", "helm", "kustomize", "rca", "devsecops", "aks", "eks", "gke"]
 }

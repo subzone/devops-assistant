@@ -1,18 +1,14 @@
 # Roadmap
 
-**v0.3:** multi-cloud infra skills (design, Terraform/OpenTofu, Crossplane, cloud ops), Terraform/Crossplane validation, cloud CLI guard.
-
-**v0.1:** TUI (Cluster, Argo CD, RCA, Lock views; mouse; focus bridge; in-TUI unlock), local config commands, lock/grants, redaction, guardrail hook, audit log, read-only MCP tools (k8s, Argo CD, RCA), validation pipeline, plugin commands, skills, agents.
+What shipped is in [CHANGELOG.md](CHANGELOG.md). Next, roughly in order:
 
 | Milestone | Scope |
 |---|---|
-| v0.2 Hard isolation | k8sh daemon as a separate OS user, grants in memory, socket peer-cred checks; short-lived break-glass token via TokenRequest per grant |
-| v0.3 GitOps write path | templates (app, overlay, ExternalSecret, Application/AppProject), live-vs-rendered diff with prune detection, PR creation (GitHub first) |
-| v0.4 k8s pane | `/k8s`: the cluster view as a Claude Code mod docked beside the chat (Cluster, Argo CD, RCA, Lock; Ask Claude; pane unlock via `k8sh grant-from-ui`). Done in 0.4.0. |
-| v0.6 Operations | Fleet view, Security overview (posture checks), RCA history, background monitoring with alerts, incident management (timeline, postmortem drafts). Done in 0.6.0. |
-| v0.6.x Operations (rest) | Validation view, Grafana panel links, alert hand-off (Slack/PagerDuty via their MCP servers), incident export to GitHub issues |
-| v0.5 Security | Trivy/Grype/Syft, kube-bench, Kubescape, RBAC analysis, cosign; Kyverno policy authoring (audit → enforce) |
-| v0.6 Live verification | Argo Rollouts analysis, smoke tests, SLO deltas via Prometheus/Grafana MCP |
-| v0.7 Resilience | capacity (rightsizing, k6), chaos (Chaos Mesh/Litmus via Argo Workflows, SLO abort), DR/HA (Velero drills, RTO/RPO, rebuild-from-Git); all destructive paths behind grants |
-| v0.8 Claude Desktop | `.mcpb` packaging, MCP Apps views, elicitation confirmations |
-| v0.9 Fleet ops | CRD explorer, inference (KServe/vLLM), upgrades for AKS/EKS/GKE and on-prem via Ansible |
+| **0.6.x Operations, rest** | Validation view in the pane; Grafana panel links; alert hand-off (Slack, PagerDuty via their MCP servers); incident export to GitHub issues; a Setup view in the pane fed by `doctor`; pane hotkeys for actions; Revoke all and grant countdowns in the Lock tab |
+| **0.7 Hard isolation** | k8sh daemon as a separate OS user, grants in memory, socket peer-credential checks; a short-lived break-glass token via TokenRequest per grant (closes the same-user limit in [SECURITY.md](SECURITY.md)) |
+| **0.8 GitOps write path** | templates (app, overlay, ExternalSecret, Application/AppProject), live-vs-rendered diff with prune detection, PR creation (GitHub first) |
+| **0.9 Security depth** | image scanning and SBOMs (Trivy/Grype/Syft), kube-bench via a GitOps Job, RBAC analysis, cosign verification; Kyverno policy authoring (audit → enforce); scheduled cloud posture diffs |
+| **0.10 Live verification** | Argo Rollouts analysis, smoke tests, SLO deltas via Prometheus/Grafana MCP |
+| **0.11 Resilience** | capacity (rightsizing loops, k6), chaos (Chaos Mesh/Litmus via Argo Workflows, SLO abort), DR/HA (Velero drills, RTO/RPO, rebuild-from-Git); all destructive paths behind grants |
+| **0.12 Claude Desktop** | `.mcpb` packaging, MCP Apps views, elicitation confirmations |
+| **0.13 Fleet ops** | CRD explorer, inference (KServe/vLLM), upgrades for AKS/EKS/GKE and on-prem via Ansible |

@@ -17,7 +17,7 @@ devops-assistant has two rules that no setting turns off:
 | Kubernetes RBAC | The agent identity should be read-only: `docs/rbac/agent-readonly.yaml`. | your cluster |
 | Argo CD | `automated.prune: false` by default, so pruning needs a `sync-prune` grant. | `skills/gitops-authoring` |
 
-### Known limit (v0.1)
+### Known limit: same OS user
 Grants and the HMAC key are stored in `~/.k8sh` and owned by your OS user. The hook and the deny-list stop the agent from touching them, but a process running **as your user** outside Claude's tools could in principle forge a grant. Hard isolation is on the roadmap: a k8sh daemon running as a separate OS user, holding grants in memory, with peer-credential checks on its socket. Until then, read-only cluster RBAC for the agent identity is the boundary that actually holds. Use it.
 
 The k8s pane's unlock has the same same-user limit. `k8sh grant-from-ui` can't tell the pane apart from any other process of your user that holds the UI token: the token, the guard rules and the absence of any agent route to the pane's Button and Input are what keep Claude out. A command that slips past the guard's patterns (a renamed copy of the binary, say, together with an obfuscated read of `~/.k8sh/ui.token`) could issue a grant. Rotation after each grant limits how long a token that leaked stays useful. The separate-user daemon on the roadmap closes this gap too.
@@ -33,6 +33,16 @@ The k8s pane's unlock has the same same-user limit. `k8sh grant-from-ui` can't t
 - **Read-only towards clusters.** `fleet_status`, `security_overview`, `rca_collect` and the pane's monitor only read (pods, nodes, events, NetworkPolicies, ClusterRoleBindings, Argo CD apps). The security checks read pod specs and bindings, never Secrets.
 - **Local records.** RCA history (`~/.k8sh/rca-history.json`) and incidents (`~/.k8sh/incidents.json`) are written by k8sh alone, 0600, with every text redacted first. Claude reaches them only through the tools (`rca_history`, `incident_*`); the guard keeps blocking direct access to `~/.k8sh`. Claude can open, note and resolve incidents, since that is bookkeeping on this machine and changes nothing in a cluster; `incident_open` and `incident_status` are in the audit log.
 - **Monitoring is off by default** and runs only while you have it on, at the interval you set. Each run reads pods and events cluster-wide, so on large clusters pick a longer interval or fewer contexts.
+
+### Analysis skills (cloud security, inventory, cost, on-prem)
+- **Read-only calls only.** The cloud CLI rules apply as before, plus: storage writes (`gcloud storage rm|cp|mv`, `gsutil` writes, `aliyun oss` writes, `az … upload|sync|move`) and Prowler's `--fix`/`--fixer` are blocked; `trivy k8s` must run with `--disable-node-collector` (otherwise it starts Jobs in the cluster).
+- **On-prem tools are allow-listed** (`internal/guard/readonly.go`): `govc` info/ls/find/events/metrics only (not `env`, not `vm.info -e`, whose extraConfig can hold guestinfo secrets), `pvesh get|ls`, `qm`/`pct` list/config/status, `virsh` reads (not `--security-info`), and ad-hoc `ansible` only with `setup`, `gather_facts`, `ping`, `package_facts` or `service_facts`. `ansible-inventory --list/--host` and `ansible-vault view/decrypt` are blocked because they print variables and secrets.
+- **Known limit:** commands run over `ssh <host> '…'` are matched only for the tools above; a general shell on a remote host is not classified. Use read-only identities ([docs/rbac/cloud-readonly.md](docs/rbac/cloud-readonly.md)): vSphere Read-only, Proxmox PVEAuditor, an Ansible user without sudo, AWS SecurityAudit/ViewOnlyAccess, Azure Reader/Security Reader, GCP viewer roles.
+- Raw results stay in a temp directory outside the repo; reports never include secret values or key material.
+
+### Getting the binary and other tools
+- **Release download.** When no k8sh binary is present and Go isn't installed, `bin/k8sh-launch` downloads `k8sh-<os>-<arch>` for the plugin's version from this repository's GitHub Releases and installs it only if its SHA256 matches the release's `SHA256SUMS`; otherwise it refuses and the guard keeps failing closed. Both files come from the same release, so the check catches corruption and truncation, not a compromised release. Never inside the guard hook. `K8SH_NO_DOWNLOAD=1` turns it off; then build from source (`go build ./cmd/k8sh`) or place a binary you verified yourself.
+- **`k8sh doctor` only looks** (PATH lookups and version flags). Installing happens in `/devops-assistant:setup`, only for groups you pick, one command at a time after you confirm, from package managers (Homebrew, apt, pipx, `go install`) or the official docs; never `curl | sh`, never `sudo` on your behalf.
 
 ## Credentials
 - **Redaction** (`internal/redact`) runs on every value k8sh returns and on the audit log: Secret `data`/`stringData` (keys stay visible), `last-applied-configuration`, sensitive env values, and token patterns (JWT, AWS, GitHub, Slack, Grafana, PEM, URL credentials, Authorization headers, key=value pairs).

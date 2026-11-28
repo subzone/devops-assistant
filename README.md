@@ -1,19 +1,19 @@
 # devops-assistant
 
-GitOps-first Kubernetes operations for Claude Code, with a **hard lock on destructive actions** and **zero credential exposure**.
+A Claude Code plugin for DevOps work on Kubernetes, six clouds and on-prem — **GitOps-first, read-only by default, with a hard lock on destructive actions and zero credential exposure.**
 
-- Read clusters through MCP: contexts, resources, events, logs, Argo CD apps and trees, ranked RCA signals
-- Changes only through Git → PR → Argo CD; never direct cluster mutation
-- Validation pipeline for generated code: render (Kustomize/Helm) → secret scan → schema → lint → policy → security → server dry-run
-- Destructive actions are locked. Unlocking takes a single-use, exact-scope, ≤15-minute grant that **you** issue in your own terminal
-- Secrets redacted everywhere. Generated manifests use `ExternalSecret` only
-- Single static Go binary, standard library only, uses your `kubectl` and its cloud auth plugins
+| | |
+|---|---|
+| **See** | `/k8s` docks a live cluster view beside the chat: Cluster, Argo CD, RCA, Lock, Fleet, Security and Incidents tabs, with Steve, a grumpy DevOps engineer who listens and talks back. |
+| **Diagnose** | Ranked RCA with history ("since when?"), background monitoring with alerts, incidents with timelines and postmortem drafts. |
+| **Analyse** | Read-only security, inventory and cost reviews across AWS, Azure, GCP, Hetzner, DigitalOcean, Alibaba, your clusters and on-prem (vSphere, Proxmox, KVM, bare metal). |
+| **Design** | Infrastructure and network designs with diagrams as code and a Well-Architected review, turned into validated Terraform/OpenTofu or Crossplane. |
+| **Change** | Only through Git → PR → Argo CD, after a validation pipeline (render, secrets, schema, lint, policy, security, cost). |
+| **Stay safe** | A guard hook blocks destructive and secret-reading commands. Destructive actions need a single-use, exact-scope, ≤15-minute grant that **you** issue. Secrets are redacted everywhere. |
 
-See [SECURITY.md](SECURITY.md) for the full model.
+Everything runs on your machine with your existing logins: one static Go binary (`k8sh`, standard library only) that shells out to `kubectl` and the cloud CLIs.
 
 ## Install
-
-Requires `kubectl`, plus Go 1.24+ (the plugin builds `k8sh` on first use) or a release binary.
 
 ```
 /plugin marketplace add subzone/devops-assistant
@@ -21,149 +21,92 @@ Requires `kubectl`, plus Go 1.24+ (the plugin builds `k8sh` on first use) or a r
 /devops-assistant:setup
 ```
 
-Coming from `k8s-handler` (renamed in 0.5.0)? Auto-update can't follow a name change, so reinstall once:
-```
-/plugin uninstall k8s-handler@subzone
-/plugin marketplace update subzone
-/plugin install devops-assistant@subzone
-```
-Your `~/.k8sh` config, tiers, grants and audit log stay as they are. If you ran `/k8s-handler:setup`, run `/devops-assistant:setup` again so the deny-list rules and status line use the new tool names.
+`/devops-assistant:setup` gets the `k8sh` binary (release download checked against its SHA256, or a build from source when Go is installed), checks which tools each feature can use (`k8sh doctor`), installs the groups you pick after you confirm, sets your context tiers, the deny-list and status line, and recommends read-only identities. Details: [Getting started](docs/getting-started.md) · [Dependencies](docs/dependencies.md).
 
-Optional CLI on your PATH:
-```bash
-go install github.com/subzone/devops-assistant/cmd/k8sh@latest
-```
-
-## Multi-cloud infrastructure
-
-AWS, Azure, GCP, Hetzner, DigitalOcean, Alibaba Cloud:
-- Design: landing zone, network plan (CIDRs, tiers, egress, private endpoints), diagrams as code, Well-Architected review (`infra-design` skill)
-- Code: Crossplane (AWS/Azure/GCP providers; `provider-terraform` for Hetzner/Alibaba) or Terraform/OpenTofu with remote state and keyless auth
-- Reconciliation: Argo CD syncs Crossplane objects (incl. Terraform `Workspace`s), or an Argo Workflows plan → approve → apply pipeline
-- Validation: `validate_manifests` detects Terraform (secrets, fmt, validate, tflint, trivy, checkov, infracost) and Crossplane (`crossplane beta validate`, `deletionPolicy` checks)
-- Ops: read-only logs, inventory and costs through each cloud's CLI (`cloud-ops` skill)
-- Guard: cloud CLIs are read-only for Claude; `terraform/tofu apply|destroy|import|state …`, `pulumi up`, mutating `aws/az/gcloud/hcloud/doctl/aliyun` calls and token-printing commands are blocked; cloud credential files are unreadable
-
-## k8s pane
-
-Type `/k8s` and the cluster view opens on the right side of the chat, inside the same Claude Code session. You don't need tmux, a second window or a separate process. It works in any terminal, Apple Terminal included, and in the Code tab of the Claude desktop app. `/k8s` again (or Esc while the pane has focus) closes it. `/devops-assistant:ui` opens the same pane.
-```
- 1: Cluster  2: Argo CD  3: RCA  4: Lock               │  ...chat...
- context k3d-mycluster [dev] ▾   LOCKED                │
- ⌂ Cluster › payments › deploy/api › pod/api-2         │
- ▾ ✔ payments                                          │
-   ▾ ⚠ deploy/api  1/2                                 │
-     ▸ ✔ pod/api-1  Running                            │
-     ▸ ✖ pod/api-2  Running OOMKilled r:7              │
- ───────────────────────────────────────               │
- Pod payments/api-2  phase: Running  restarts: 7       │
- [ Logs ] [ Prev logs ] [ Events ] [ Describe ]        │
- [ Ask Claude ] [ ← Back ] [ ⌂ Top ] [ ⟳ Refresh ]     │
- [ Unlock… ]                                           │
-```
-- Tabs (hotkeys 1-7): Cluster (namespaces → workloads → pods → containers), Argo CD (apps → resources, problems first), RCA (ranked findings, recent warnings and 7 days of history), Lock (lock state, active grants with expiry, contexts and tiers), Fleet, Security, Incidents (below).
-
-### Fleet, security, history, monitoring and incidents
-
-- **Fleet (5):** every context at a glance, troubled ones first: reachable, nodes ready, failing and not-ready pods, warning events of the last 15 minutes, degraded or out-of-sync Argo CD apps, and the top problems. **Switch to** opens a context in the other tabs.
-- **Security (6):** read-only posture checks, worst first: privileged containers, host network/PID/IPC and hostPath, dangerous capabilities, root, privilege escalation, unpinned images, missing memory limits, writable root filesystems, cluster-admin bound to people or app service accounts, namespaces without a NetworkPolicy. Each check lists the workloads that break it (Events, Describe and Ask Claude work on them) and how to fix it through Git. Not a vulnerability scan.
-- **RCA history:** k8sh records every RCA collection on this machine: when each problem was first and last seen, how often it came back, when it resolved. The RCA tab shows the last 7 days; Claude reads it with `rca_history` ("since when?", "has this happened before?").
-- **Monitoring:** off until you switch it on in the Incidents tab. Then every 60 s (setting **Monitoring: every N seconds**) it collects RCA on the watched contexts (setting **Monitoring: contexts**: current, all, or a list) and turns what opened or resolved into alerts: a toast, Steve, the Incidents tab, and a note on every active incident that names the object. The first run is a baseline: one line about what is broken already. The status line shows `◉ monitoring` while it runs.
-- **Incidents (7):** **Open incident…** on any ✖/⚠ row (a pod, an alert, a security check, a context) records an incident with a severity (sev1-sev4), the objects involved and the row's details. On an incident: **Note…**, **Mitigated**, **Resolve**, **Reopen**, and **Draft postmortem**, which asks Claude for a blameless postmortem in `docs/incidents/<id>.md` from the timeline, the RCA history and what changed. Claude manages them too (`incident_*` tools). Incidents live in `~/.k8sh/incidents.json`, redacted; nothing about them touches a cluster.
-- Health ages out what is over: an OOM kill on a container that has been ready for more than an hour, a Job run that failed hours ago and an evicted leftover count as history (shown in details), not as failing pods, in the pane, the fleet view, RCA and monitoring.
-- Click a row to select it; click it again to expand or collapse it. The breadcrumb jumps back to any level; `⌂` collapses everything. Long lists show 30 rows with `more…`. The actions sit right under the breadcrumb, and while logs or describe output is open the tree shows only the rows around your selection.
-- Namespaces show their pods' health (`payments  ✖2 ⚠1`) and broken ones sort first, from one all-namespaces pods call (reused for up to a minute by the background refresh). The **filter** field narrows the top level as you type; **⚠ problems only** hides healthy rows.
-- Pods are placed under their workload by owner (pod → ReplicaSet → Deployment, StatefulSet, DaemonSet), Job pods under their Job, with label matching as the fallback. Init containers count: a pod stuck in `Init:CrashLoopBackOff` says so. Pod rows show age and when the last restart was (`r:12 (last 30s ago)  age 3d`). If the selected pod is replaced in a rollout, the selection falls back to its workload.
-- Logs, previous logs, events and describe open in the detail area (`✕ close` returns to the summary). **Ask Claude** sends a short, redacted description of the selection and the last output to the chat, and Claude diagnoses it with the `rca-runbook` skill.
-- The status line shows `k8s <context> [<tier>] LOCKED` (or `UNLOCKED xN`). The pane refreshes on open, on ⟳, on tab or context change, every 15 s while open, and after Claude uses a k8sh tool.
-- **Unlock…** on a pod or workload asks you to type the context name, then issues one grant: delete for pods and daemonsets, delete or scale to 0 for deployments and statefulsets. It is single use, for that exact target, expires within 15 minutes and is audited. Only you can press it: Claude has no tool, command or prompt that reaches it.
-- Everything shown comes from the k8sh MCP tools, so it is redacted. The pane never reads kubeconfig. Switching the pane's context doesn't change kubectl's current context.
-- In the docked terminal pane, Steve sits in the background, bottom right, in shades of one blue, with the plugin's version under him. He listens while you type or dictate (sound rings by his headphones), thinks while Claude works (his bubble names the tool, never its arguments), grumbles a line when an answer is done, facepalms when a new problem shows up in the pane, and grins at a grant. He's a grumpy DevOps engineer: blunt, dry, no pleasantries, and with swearing on, mild bad words about the code and the situation ("who the hell deployed this crap?"), never slurs, never at anyone's identity. His lines are canned, and no answer goes anywhere, unless you turn on **Steve reads Claude's answers** in `/config`: then each finished answer, redacted, goes to one small `haiku` call so he can react to it in his own words (counted in `/cost`), and the pane shows **👁 reads answers (haiku)** while it's on. **♪ voice** makes him say his lines aloud (off by default). In `/config`: **Steve's voice** (auto by default: the most natural English voice installed, one marked Premium, then Enhanced, else Rocko; download more in System Settings → Accessibility → Spoken Content → Manage Voices) and **Steve swears** (on by default; off keeps him grumpy but clean). Everything he says goes through the same redaction as the pane. He shows only in empty cells, so he never covers text. The look button in the tab row cycles Steve → ∞ (a swaying 3D DevOps loop) → off. Steve's frames are built from the Steve Trash export by `node scripts/steve-frames.mjs <export dir>`.
-- The right-side dock needs Claude Code's fullscreen layout and a wide enough terminal. Otherwise the pane opens above the prompt, which is normal Claude Code behaviour.
-
-### Steve's voice and ears (optional, all local)
-
-- **A natural voice:** install [Piper](https://github.com/OHF-Voice/piper1-gpl) (`pipx install piper-tts`) and a voice: `python -m piper.download_voices --download-dir ~/.local/share/piper-voices en_US-ryan-medium` (run it with no voice name to list them all). With **Steve's speech engine** on `auto` (the default) he uses Piper when it and the voice from **Steve's Piper voice** are there, else the macOS voices.
-- **Hearing you:** `brew install whisper-cpp ffmpeg` and a model: `curl -L -o ~/.local/share/whisper-models/ggml-base.en.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin`. Press **🎤 talk** in the pane, say it, stop talking: ffmpeg records until the pause (or a second press, or 30 s), whisper.cpp transcribes on your machine, and the text lands in the prompt box for you to check and send (**Send what Steve hears** sends it at once). The first time, macOS asks to let your terminal use the microphone. Nothing records unless you press the button, and no audio leaves your machine.
-
-The older standalone TUI (`k8sh tui`, `k8sh workspace`) is still there as a fallback for a Claude Code that doesn't load mods.
+Coming from `k8s-handler` (renamed in 0.5.0)? Reinstall once: `/plugin uninstall k8s-handler@subzone`, `/plugin marketplace update subzone`, `/plugin install devops-assistant@subzone`, then `/devops-assistant:setup`. Your `~/.k8sh` stays as it is.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `/k8s` | open or close the k8s pane beside the chat |
-| `/devops-assistant:ui` | open the k8s pane (same as `/k8s`) |
-| `/devops-assistant:explain [question]` | explain/diagnose what you sent from the standalone TUI (`f`); in the pane use Ask Claude |
-| `/devops-assistant:status [context]` | contexts + tiers, lock state, Argo CD apps, top warnings |
+| `/k8s` · `/devops-assistant:ui` | open or close the k8s pane beside the chat ([guide](docs/k8s-pane.md)) |
+| `/devops-assistant:status [context]` | contexts and tiers, lock state, Argo CD apps, top warnings |
 | `/devops-assistant:rca <ns> [context] [workload]` | read-only root-cause analysis |
-| `/devops-assistant:validate <path> [context]` | validation pipeline |
-| `/devops-assistant:deploy <change>` | GitOps change: branch → edit → validate → diff → PR |
-| `/devops-assistant:unlock …` | prints the `k8sh unlock` command for you to run (user-only) |
+| `/devops-assistant:infra-security […]` | security overview of clouds, clusters or on-prem ([analysis](docs/analysis.md)) |
+| `/devops-assistant:infra-inventory […]` | what runs where, orphans, untagged, click-ops |
+| `/devops-assistant:infra-costs [clouds]` | cloud cost totals, trends, drivers, waste |
+| `/devops-assistant:k8s-costs [context]` | cluster cost per namespace/team, idle capacity, rightsizing |
+| `/devops-assistant:onprem …` | vSphere/Proxmox/KVM/bare-metal inventory, capacity, end-of-life |
+| `/devops-assistant:infra-logs …` | cloud or cluster log search around an incident |
+| `/devops-assistant:infra-design <system>` | design + diagrams + validated IaC + WAF review ([design](docs/design.md)) |
+| `/devops-assistant:deploy <change>` | GitOps change: branch → edit → validate → diff → PR ([GitOps](docs/gitops.md)) |
+| `/devops-assistant:validate <path> [context]` | run the validation pipeline |
+| `/devops-assistant:unlock …` | print the `k8sh unlock` command for **you** to run |
 | `/devops-assistant:lock` | revoke all grants |
-| `/devops-assistant:infra-design <system>` | design + network diagrams (Mermaid/D2) + validated Terraform/Crossplane, WAF review |
-| `/devops-assistant:infra-costs [clouds]` | cost totals, trends, drivers, waste (read-only) |
-| `/devops-assistant:infra-logs …` | cloud/cluster log search (read-only) |
-| `/devops-assistant:setup` | tiers, status line, observability MCP, RBAC |
+| `/devops-assistant:explain [question]` | explain what you sent from the standalone TUI |
+| `/devops-assistant:setup` | binary, tools, tiers, settings, observability, RBAC |
 
-## Unlocking a destructive action
+Skills load on their own when a request fits: `k8s-safety`, `rca-runbook`, `gitops-authoring`, `iac-terraform`, `iac-crossplane`, `infra-design`, `cloud-ops`, `cloud-security`, `cloud-inventory`, `k8s-cost`, `onprem-ops`. Agents: `rca-investigator`, `manifest-validator`, `infra-architect`, `cloud-cost-analyst`, `security-auditor`, `inventory-analyst`.
 
-```bash
-# in YOUR terminal, not in Claude
-k8sh unlock --context eks-prod --namespace payments --action delete --target pod/api-7f9c
-#   DESTRUCTIVE ACTION GRANT ... Type the context name to confirm: eks-prod
-#   🔓 granted 3f2a… — single use, expires 22:14:05
-```
-Claude can then call `destructive_delete` exactly once for that target. `k8sh actions` lists the actions, `k8sh grants` shows active grants, `k8sh lock` revokes them all.
+## How safe is it?
 
-## Configuration
+- **Read-only by default.** The PreToolUse guard blocks destructive `kubectl`/`helm`/`argocd`/`terraform` commands, mutating cloud CLI calls, scanners' fix modes, non-read on-prem commands, secret reads and credential files, and keystroke or pseudo-terminal tricks. It fails closed.
+- **Destructive actions are locked.** `destructive_*` tools need a grant you issue in your own terminal or in the pane by typing the context name:
+  ```bash
+  k8sh unlock --context eks-prod --namespace payments --action delete --target pod/api-7f9c
+  #   Type the context name to confirm: eks-prod
+  #   🔓 granted 3f2a… — single use, expires 22:14:05
+  ```
+- **No credentials anywhere.** Values are redacted in every tool result, the audit log and the UI; generated manifests use `ExternalSecret`.
 
-`/devops-assistant:setup` configures everything. Or by hand:
-```bash
-k8sh config set-tier k3d-mycluster dev      # contexts not listed count as prod
-k8sh config set-ttl 10                      # grant TTL ceiling, 1-15 min
-k8sh settings apply --statusline "k8sh statusline"   # add-only merge into ~/.claude/settings.json, keeps .bak
-```
-Tiers are labels: destructive actions stay locked on every tier.
+The full model, including its known limits: [SECURITY.md](SECURITY.md). Read-only identities to use: [Kubernetes](docs/rbac/agent-readonly.yaml), [clouds and on-prem](docs/rbac/cloud-readonly.md).
 
 ## MCP tools
 
-Read: `k8s_contexts`, `k8s_get`, `k8s_describe`, `k8s_events`, `k8s_logs`, `argo_apps`, `argo_app_tree`, `rca_collect`, `rca_history`, `fleet_status`, `security_overview`, `incident_list`, `validate_manifests`, `lock_status`, `tui_focus`
-Local records (this machine only, never a cluster): `incident_open`, `incident_note`, `incident_status`
-Locked: `destructive_delete`, `destructive_scale_zero`
+- **Read:** `k8s_contexts`, `k8s_get`, `k8s_describe`, `k8s_events`, `k8s_logs`, `argo_apps`, `argo_app_tree`, `rca_collect`, `rca_history`, `fleet_status`, `security_overview`, `incident_list`, `validate_manifests`, `lock_status`, `doctor`, `tui_focus`
+- **Local records** (this machine only, never a cluster): `incident_open`, `incident_note`, `incident_status`
+- **Locked:** `destructive_delete`, `destructive_scale_zero`
 
-Prometheus and Grafana: use their MCP servers alongside this one. See [docs/observability.md](docs/observability.md).
+Prometheus and Grafana work through their own MCP servers next to this one: [docs/observability.md](docs/observability.md).
 
-## CI
+## Documentation
 
-```bash
-k8sh validate apps/payments/overlays/prod --strict
+| Page | |
+|---|---|
+| [Getting started](docs/getting-started.md) | install, the binary, setup, first steps, upgrading |
+| [Dependencies](docs/dependencies.md) | every external tool per feature, `k8sh doctor`, installing |
+| [k8s pane](docs/k8s-pane.md) | tabs, monitoring, incidents, unlock, Steve's voice and ears |
+| [Analysis](docs/analysis.md) | security, inventory, cost and on-prem reviews |
+| [Design](docs/design.md) | infrastructure design, diagrams, where to see them |
+| [GitOps and validation](docs/gitops.md) | the change path, the validation pipeline, CI, IaC reconciliation |
+| [Observability](docs/observability.md) | Grafana and Prometheus MCP |
+| [CLI reference](docs/cli.md) | every `k8sh` command |
+| [SECURITY.md](SECURITY.md) · [ROADMAP.md](ROADMAP.md) · [CHANGELOG.md](CHANGELOG.md) | |
+
+## Repository layout
 ```
-Exits 1 when a required stage fails. With `--strict`, missing scanners count as failures.
-
-## Layout
-```
-cmd/k8sh/            CLI + MCP entrypoint
-internal/guard       PreToolUse decisions
+cmd/k8sh/            CLI + MCP entrypoint (doctor.go: tool check)
+internal/guard       PreToolUse decisions (readonly.go: on-prem allow-lists)
 internal/grant       destructive-action lock
 internal/redact      credential scrubbing
-internal/kube        kubectl wrapper, Argo CD, RCA
-internal/validate    validation pipeline
+internal/kube        kubectl wrapper, Argo CD, RCA, fleet, security checks
+internal/history     RCA history (~/.k8sh/rca-history.json)
+internal/incident    incidents (~/.k8sh/incidents.json)
+internal/doctor      which tools each feature can use, install plans
+internal/validate    validation pipeline (Kubernetes, Terraform, Crossplane)
 internal/mcp         stdio MCP server + tools
-internal/tui         standalone terminal UI (fallback)
+internal/tui         standalone terminal UI (fallback for hosts without mods)
 internal/focus       TUI → Claude selection bridge
+bin/k8sh-launch      finds, builds or downloads (SHA256-checked) the k8sh binary
+hooks/k8s-pane.js    the k8s pane (Claude Code mod); tests in hooks/k8s-pane.test.ts
+hooks/steve.js, steve-frames.js, infinity.js   the pane's backdrops
+commands/ skills/ agents/   slash commands, skills and subagents
+docs/                guides, RBAC, settings
 .claude-plugin/      plugin + marketplace manifests
-hooks/k8s-pane.js    the k8s pane (Claude Code mod), tests in hooks/k8s-pane.test.ts
-hooks/steve.js       the pane's Steve backdrop (pure renderer); frames in hooks/steve-frames.js
-hooks/infinity.js    the pane's ∞ backdrop (pure renderer)
-scripts/steve-frames.mjs  builds hooks/steve-frames.js from the Steve Trash PNGs (ffmpeg)
 types/index.d.ts     the pane's state contract
-commands/ skills/ agents/ hooks/   Claude Code plugin
-docs/                RBAC, settings, observability
 ```
 
-## Roadmap
-See [ROADMAP.md](ROADMAP.md).
+Build and test: `make build test vet`; `make dist` cross-compiles release binaries. A `v*` tag publishes them with `SHA256SUMS` (`.github/workflows/release.yml`).
 
 ## License
 MIT

@@ -9,6 +9,7 @@ import (
 
 	"github.com/subzone/devops-assistant/internal/audit"
 	"github.com/subzone/devops-assistant/internal/config"
+	"github.com/subzone/devops-assistant/internal/doctor"
 	"github.com/subzone/devops-assistant/internal/focus"
 	"github.com/subzone/devops-assistant/internal/grant"
 	"github.com/subzone/devops-assistant/internal/history"
@@ -34,7 +35,9 @@ Rules you must follow:
 - Run validate_manifests on anything you generate before proposing a PR.
 - rca_history says since when a problem exists and whether it happened before; fleet_status and
   security_overview are read-only overviews. incident_* tools keep incidents on this machine
-  (title, severity, timeline); they never touch a cluster.`
+  (title, severity, timeline); they never touch a cluster.
+- When a command or scanner is missing, call doctor for the install command and offer it to the user;
+  install only what they confirm (or point them to /devops-assistant:setup).`
 
 func scope(ctx context.Context, d Deps, a map[string]any) (kube.Scope, error) {
 	c, err := d.Kube.Resolve(ctx, S(a, "context"))
@@ -276,6 +279,14 @@ func Register(s *Server, d Deps) {
 				o.DryRun = func(ctx context.Context, f string) (string, error) { return d.Kube.DryRunServer(ctx, c, f) }
 			}
 			return validate.Run(ctx, S(a, "path"), o)
+		})
+
+	s.Add(Tool{Name: "doctor", Description: "Which external tools devops-assistant can use on this machine, per feature group (core, gitops, validate, iac, security, cloud, onprem, design, pane), with versions and the install command for each missing one. Looks only; installs nothing. Install only what the user picks, one command at a time, after they confirm (see /devops-assistant:setup).",
+		InputSchema: Obj(map[string]any{"groups": Str("comma-separated groups, empty = all")}),
+		Annotations: ro("Tool check")},
+		func(ctx context.Context, a map[string]any) (any, error) {
+			r := doctor.Check(ctx, doctor.DefaultEnv(), doctor.Wanted(S(a, "groups")))
+			return map[string]any{"report": r, "plan": doctor.Plan(r), "manual": doctor.Manual(r)}, nil
 		})
 
 	s.Add(Tool{Name: "lock_status", Description: "Show the destructive-action lock: active user grants (scope + expiry). Grants can only be created by the user.", Annotations: ro("Lock status")},

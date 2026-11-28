@@ -48,7 +48,7 @@ func TestInitializeAndList(t *testing.T) {
 		t.Fatalf("want 2 responses, got %d", len(res))
 	}
 	b, _ := json.Marshal(res)
-	for _, name := range []string{"k8s_get", "rca_collect", "destructive_delete", "lock_status"} {
+	for _, name := range []string{"k8s_get", "rca_collect", "destructive_delete", "lock_status", "doctor"} {
 		if !strings.Contains(string(b), name) {
 			t.Errorf("tool %s missing", name)
 		}

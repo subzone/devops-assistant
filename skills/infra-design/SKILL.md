@@ -7,10 +7,17 @@ description: Design cloud infrastructure and networks on AWS, Azure, GCP, Hetzne
 
 Output goes into the GitOps repo, so design, diagram and code are reviewed together:
 ```
-docs/architecture/<system>/README.md      decisions, assumptions, WAF review
+docs/architecture/<system>/README.md      decisions, assumptions, WAF review, both diagrams inline
 docs/architecture/<system>/overview.mmd   context/components (Mermaid)
-docs/architecture/<system>/network.d2     network: CIDRs, zones, flows (D2 or Mermaid)
+docs/architecture/<system>/network.mmd    network: CIDRs, zones, flows (Mermaid; network.d2 only if `d2` is installed)
 ```
+
+## Make it visible
+The design has to be readable without extra tools:
+- **Inline the diagrams in README.md** as ```` ```mermaid ```` blocks (same content as the `.mmd` files). GitHub, GitLab and VS Code's Markdown preview render them as pictures.
+- If `mmdc` (Mermaid CLI) is installed, also render `overview.svg` and `network.svg` next to them; if `d2` is installed and you wrote D2, render `network.svg` with `d2 network.d2 network.svg`.
+- If this session can publish a page for the user (an HTML artifact), offer to publish the design: the two diagrams rendered (Mermaid from a pinned CDN version), the WAF table, the cost estimate and the open decisions. Leave out account IDs and public IPs.
+- At the end, tell the user exactly where to look: the README path, and how to preview it (GitHub, or VS Code `Markdown: Open Preview`).
 
 ## Steps
 1. **Requirements:** workload, regions, environments, RTO/RPO, compliance, expected load, budget, team skills. Ask only for what changes the design.
@@ -58,6 +65,8 @@ flowchart LR
   k8s -->|TLS 5432| db
   k8s -->|egress via NAT| internet((Internet))
 ```
-D2 suits larger network maps: `vpc: {pub: {...}; app: {...}}` with `app.k8s -> data.db: "5432/TLS"`.
+D2 suits larger network maps (`vpc: {pub: {...}; app: {...}}` with `app.k8s -> data.db: "5432/TLS"`) but needs the `d2` CLI to render; default to Mermaid.
+
+Reviewing an existing environment instead of designing a new one: build the picture from `cloud-inventory` (and `onprem-ops`) output first, then run the same WAF review on what exists, with `cloud-security` findings in the security line and `cloud-ops`/`k8s-cost` numbers in the cost line.
 
 Rules: no credentials, account IDs or public IPs of prod systems in diagrams unless the user asks.

@@ -6,7 +6,7 @@ argument-hint: "<system and clouds, e.g. 'payments on Hetzner + AWS, EU, 99.9%'>
 Delegate to the `infra-architect` agent: $ARGUMENTS
 
 Deliver:
-- the design folder (README, `overview.mmd`, `network.d2`)
+- the design folder (README with both diagrams inline, `overview.mmd`, `network.mmd`), and where/how to view it rendered
 - validated IaC (Crossplane or Terraform/OpenTofu) with its GitOps reconciliation wiring
 - the cost estimate
 - a short list of open decisions

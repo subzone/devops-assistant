@@ -7,6 +7,8 @@ description: Read-only cloud operations across AWS, Azure, GCP, Hetzner, Digital
 
 The guard allows only read calls (list/describe/get/show/query/logs/costs). It blocks mutations and commands that print tokens. Use the user's existing CLI login; never ask for keys.
 
+Related skills: `cloud-inventory` (what runs where, orphans, tagging), `cloud-security` (posture), `k8s-cost` (cost per namespace/team, idle, rightsizing), `onprem-ops` (vSphere, Proxmox, KVM, bare metal).
+
 ## Logs
 | Cloud | Command |
 |---|---|
@@ -32,5 +34,5 @@ The guard allows only read calls (list/describe/get/show/query/logs/costs). It b
 ## How to answer
 - Fetch the data and save large results to files, then compute totals in code. Don't estimate from memory.
 - Report the top cost drivers, the trend vs the previous period, and untagged spend.
-- Waste checks: unattached volumes/IPs, idle LBs, oversized nodes (compare with Prometheus usage), old snapshots, non-prod running 24/7.
+- Waste checks: unattached volumes/IPs, idle LBs, oversized nodes (compare with Prometheus usage), old snapshots, non-prod running 24/7. `cloud-inventory` finds the orphans; `k8s-cost` splits cluster spend.
 - Recommendations become Terraform/Crossplane changes (PR), never direct CLI changes.

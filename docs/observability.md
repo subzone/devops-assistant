@@ -23,6 +23,8 @@ Any Prometheus MCP server that exposes PromQL query and range-query tools works.
 | Use | Example |
 |---|---|
 | RCA | restarts, memory vs limit, 5xx ratio, Loki error logs around the incident |
-| Capacity (roadmap) | requests vs usage, headroom per node pool |
+| Cost and rightsizing (`k8s-cost`) | p95 CPU/memory usage over 7 days vs requests, OOM risk, under-used nodes |
+| Cloud cost (`cloud-ops`) | node utilisation to back "oversized node" findings |
+| Logs (`/infra-logs`) | Loki queries around an incident, on clouds without a hosted log service |
 | Chaos (roadmap) | steady-state SLO query + abort condition |
 | Live verification (roadmap) | SLO before/after a sync |

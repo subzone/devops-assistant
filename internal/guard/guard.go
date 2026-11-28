@@ -47,7 +47,8 @@ var bashRules = []rule{
 	r(b+`argocd\b[^;&|]*\sapp\s+(delete|terminate-op|rollback|set|patch)\b`, "destructive Argo CD action; use k8sh with a user grant"),
 	r(b+`argocd\b[^;&|]*\sapp\s+sync\b[^;&|]*(--prune|--force|--replace)`, "prune/force sync is destructive; use k8sh with a user grant"),
 	r(b+`ansible-playbook\b`, "ansible runs go through k8sh (check mode by default, grant for destructive plays)"),
-	r(b+`ansible\b[^;&|]*\s-m\s+(shell|command|raw|file|reboot)`, "ad-hoc ansible mutation blocked"),
+	r(b+`ansible-inventory\b[^;&|]*\s(--list|--host)\b`, "ansible-inventory --list/--host prints host variables (can include vaulted secrets); use --graph"),
+	r(b+`ansible-vault\s+(view|decrypt|edit|rekey)\b`, "decrypting Ansible Vault content is blocked"),
 	// --- chaos / backup ---
 	r(b+`velero\b[^;&|]*\s(delete|restore\s+create)\b`, "velero delete/restore is destructive; use k8sh with a user grant"),
 	// --- cloud cluster destruction ---
@@ -73,6 +74,14 @@ var bashRules = []rule{
 	r(`(?-i:`+b+`aliyun\s+[a-z0-9-]+\s+(Delete|Release|Stop|Create|Modify|Remove|Update|Reboot|Unbind|Detach|Attach|Allocate|Reset|Replace|Revoke|Authorize|Run|Start|Put|Set)[A-Za-z]*)`, "cloud changes go through Terraform/Crossplane in Git (read-only aliyun Describe*/List*/Get* calls are fine)"),
 	r(`\$\{?(AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|ARM_CLIENT_SECRET|AZURE_CLIENT_SECRET|ARM_ACCESS_KEY|GOOGLE_CREDENTIALS|HCLOUD_TOKEN|DIGITALOCEAN_(ACCESS_)?TOKEN|ALICLOUD_SECRET_KEY|ALICLOUD_ACCESS_KEY|ALIBABA_CLOUD_ACCESS_KEY_SECRET|INFRACOST_API_KEY|GRAFANA_\w*TOKEN|GITHUB_TOKEN|GH_TOKEN|TF_TOKEN_\w+|VAULT_TOKEN)\b`, "reading credential environment variables is blocked"),
 	r(b+`terraform\b[^;&|]*\s(destroy|apply)\b`, "terraform apply/destroy blocked from the agent"),
+	r(b+`az\s+[^;&|]*\s(upload|upload-batch|sync|move)\b`, "cloud changes go through Terraform/Crossplane in Git (read-only az calls are fine)"),
+	r(b+`gcloud\s+storage\s+(rm|cp|mv|rsync)\b`, "storage writes/deletes go through Git-managed infrastructure"),
+	r(b+`gsutil\b[^;&|]*\s(rm|rb|mb|cp|mv|rsync|setmeta|acl\s+(ch|set)|iam\s+(ch|set)|defacl|lifecycle\s+set|versioning\s+set)\b`, "storage writes/deletes go through Git-managed infrastructure"),
+	r(b+`aliyun\s+oss\s+(rm|cp|mv|sync|mkdir|mb|set-acl|set-meta|restore|create-symlink|bucket-\S+\s+--method\s+(put|delete))\b`, "storage writes/deletes go through Git-managed infrastructure"),
+	// --- security scanners: read-only modes only ---
+	r(b+`prowler\b[^;&|]*\s--fix`, "Prowler's fixer changes the cloud; fixes go through Terraform/Crossplane in Git"),
+	// --- on-prem: govc, pvesh, qm/pct, virsh are allow-listed in onprem() ---
+	r(b+`govc\s+vm\.info\b[^;&|]*\s-e\b`, "govc vm.info -e prints extraConfig, which can hold guestinfo secrets"),
 	// --- git history ---
 	r(b+`git\b[^;&|]*\spush\b[^;&|]*(\s-f\b|--force|--mirror|--delete|\s:\S)`, "force-push / remote deletion blocked"),
 	r(b+`git\b[^;&|]*\s(filter-branch|filter-repo)\b`, "history rewrite blocked"),
@@ -122,6 +131,9 @@ func Bash(cmd string) Decision {
 		if rl.re.MatchString(norm) {
 			return deny(rl.reason)
 		}
+	}
+	if d := readOnlyTools(norm); !d.Allow {
+		return d
 	}
 	if readCmd.MatchString(norm) || strings.Contains(norm, "KUBECONFIG") {
 		for _, f := range strings.Fields(norm) {

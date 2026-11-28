@@ -27,7 +27,7 @@ import (
 	"github.com/subzone/devops-assistant/internal/validate"
 )
 
-var version = "0.6.0"
+var version = "0.6.1"
 
 const usage = `k8sh — GitOps-first Kubernetes operations with a destructive-action lock
 
@@ -55,6 +55,9 @@ Usage:
   k8sh settings apply [--path P] [--statusline CMD] [--force-statusline] [--dry-run]
                                    merge deny-list + status line into Claude settings (add-only, .bak kept)
   k8sh statusline                  one-line status for the Claude Code status line
+  k8sh doctor [--group G,..] [--plan] [--json]
+                                   which tools each feature can use, and how to install the
+                                   missing ones (looks only; installs nothing)
   k8sh audit [--tail N]            show the redacted audit log
   k8sh version
 `
@@ -129,6 +132,8 @@ func main() {
 		runValidate(ctx, os.Args[2:])
 	case "statusline":
 		statusline(ctx, home, cfg)
+	case "doctor":
+		runDoctor(ctx, os.Args[2:])
 	case "audit":
 		fs := flag.NewFlagSet("audit", flag.ExitOnError)
 		n := fs.Int("tail", 50, "lines")

@@ -2,8 +2,10 @@
 # Locates or builds the k8sh binary, then execs it.
 # Order: plugin bin/k8sh-<os>-<arch> (release), then in a source checkout with Go
 # bin/k8sh built from this source (rebuilt when a .go file is newer), then plugin
-# bin/k8sh, then k8sh on PATH. A checkout prefers its own source over PATH, which
-# may hold another installed version of this plugin's binary.
+# bin/k8sh, then the release binary of this plugin version downloaded from GitHub
+# and checked against the release's SHA256SUMS (not in hook mode; K8SH_NO_DOWNLOAD=1
+# turns it off), then k8sh on PATH. A checkout prefers its own source over PATH,
+# which may hold another installed version of this plugin's binary.
 # If no binary can be found in hook mode, fail CLOSED for k8s-related commands.
 set -euo pipefail
 
@@ -20,6 +22,37 @@ stale() {
   [ -n "$(find "$ROOT/cmd" "$ROOT/internal" "$ROOT/go.mod" -newer "$ROOT/bin/k8sh" \( -name '*.go' -o -name go.mod \) 2>/dev/null | head -n 1)" ]
 }
 
+REPO="https://github.com/subzone/devops-assistant"
+
+sha256() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1"; else sha256sum "$1"; fi | awk '{print $1}'; }
+
+# download fetches bin/k8sh-<os>-<arch> for this plugin version and installs it
+# only if its SHA256 matches the release's SHA256SUMS.
+download() {
+  [ "${K8SH_NO_DOWNLOAD:-}" = 1 ] && return 1
+  [ "${1:-}" = hook ] && return 1   # never inside the 10s guard hook
+  command -v curl >/dev/null 2>&1 || return 1
+  local ver name tmp want got
+  ver="$(grep -m1 '"version"' "$ROOT/.claude-plugin/plugin.json" 2>/dev/null | sed -E 's/.*"version" *: *"([^"]+)".*/\1/')"
+  [ -n "$ver" ] || return 1
+  name="k8sh-$OS-$ARCH"
+  mkdir -p "$ROOT/bin" && tmp="$(mktemp -d "$ROOT/bin/.dl.XXXXXX")" || return 1
+  echo "k8sh: downloading $name v$ver from $REPO/releases …" >&2
+  if curl -fsSL --max-time 120 -o "$tmp/$name" "$REPO/releases/download/v$ver/$name" &&
+     curl -fsSL --max-time 30 -o "$tmp/SHA256SUMS" "$REPO/releases/download/v$ver/SHA256SUMS"; then
+    want="$(awk -v n="$name" '$2 == n || $2 == "*" n {print $1}' "$tmp/SHA256SUMS")"
+    got="$(sha256 "$tmp/$name")"
+    if [ -n "$want" ] && [ "$want" = "$got" ]; then
+      chmod 755 "$tmp/$name" && mv -f "$tmp/$name" "$ROOT/bin/$name"
+      rm -rf "$tmp"; echo "k8sh: installed $ROOT/bin/$name (sha256 ok)" >&2; return 0
+    fi
+    echo "k8sh: checksum mismatch for $name v$ver; not using it" >&2
+  else
+    echo "k8sh: no release binary for $name v$ver (offline, or not released yet)" >&2
+  fi
+  rm -rf "$tmp"; return 1
+}
+
 find_bin() {
   [ -x "$ROOT/bin/k8sh-$OS-$ARCH" ] && { echo "$ROOT/bin/k8sh-$OS-$ARCH"; return 0; }
   if [ -f "$ROOT/go.mod" ] && command -v go >/dev/null 2>&1; then
@@ -28,21 +61,22 @@ find_bin() {
     fi
   fi
   [ -x "$ROOT/bin/k8sh" ] && { echo "$ROOT/bin/k8sh"; return 0; }
+  download "${1:-}" && { echo "$ROOT/bin/k8sh-$OS-$ARCH"; return 0; }
   command -v k8sh 2>/dev/null && return 0
   return 1
 }
 
-if BIN="$(find_bin)"; then
+if BIN="$(find_bin "${1:-}")"; then
   exec "$BIN" "$@"
 fi
 
 if [ "${1:-}" = "hook" ]; then
   input="$(cat)"
   if printf '%s' "$input" | grep -Eqi 'kubectl|helm|argocd|ansible|velero|eksctl|aws eks|az aks|gcloud container|terraform|\.kube|\.aws|\.azure|gcloud|secret|base64|\.k8sh|\.env'; then
-    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"k8sh guardrail: k8sh binary not installed, failing closed for Kubernetes/credential commands. Install Go 1.24+ or a k8sh release binary (see README)."}}'
+    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"k8sh guardrail: k8sh binary not installed, failing closed for Kubernetes/credential commands. Run /devops-assistant:setup (downloads the release binary), or install Go 1.24+."}}'
   fi
   exit 0
 fi
 
-echo "k8sh: binary not found. Install Go 1.24+ (auto-build) or download a release into $ROOT/bin/ (see README)." >&2
+echo "k8sh: binary not found and no release download for this version. Install Go 1.24+ (auto-build), or put k8sh-$OS-$ARCH from $REPO/releases into $ROOT/bin/ (see README)." >&2
 exit 1
