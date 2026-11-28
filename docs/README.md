@@ -15,6 +15,6 @@ GitOps-first DevOps for Claude Code: a live k8s pane, RCA and incidents, read-on
 | [Observability](observability.md) | Grafana and Prometheus MCP next to k8sh |
 | [CLI reference](cli.md) | every `k8sh` command |
 | [RBAC: Kubernetes](rbac/agent-readonly.yaml) · [RBAC: clouds and on-prem](rbac/cloud-readonly.md) | read-only identities |
-| [Security model](../SECURITY.md) · [Roadmap](../ROADMAP.md) · [Changelog](../CHANGELOG.md) | |
+| [Security model](https://github.com/subzone/devops-assistant/blob/main/SECURITY.md) · [Roadmap](https://github.com/subzone/devops-assistant/blob/main/ROADMAP.md) · [Changelog](https://github.com/subzone/devops-assistant/blob/main/CHANGELOG.md) | |
 
 Design notes: [k8s pane as a Claude Code mod (phase 1 plan)](plan/side-pane-mod.md).

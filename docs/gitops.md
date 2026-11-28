@@ -37,4 +37,4 @@ Exits 1 when a required stage fails. With `--strict`, missing scanners count as 
 - Credentials come from workload identity / OIDC or `ExternalSecret`, never from the repo.
 
 ## Destructive steps
-Pruning, deleting, scaling to zero, rollbacks and the like are locked. Claude shows the exact `k8sh unlock …` command, you run it in your own terminal (or use **Unlock…** in the pane), and the grant allows that one action once. See [SECURITY.md](../SECURITY.md).
+Pruning, deleting, scaling to zero, rollbacks and the like are locked. Claude shows the exact `k8sh unlock …` command, you run it in your own terminal (or use **Unlock…** in the pane), and the grant allows that one action once. See [SECURITY.md](https://github.com/subzone/devops-assistant/blob/main/SECURITY.md).

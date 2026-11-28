@@ -45,7 +45,7 @@ Actuals per cloud (Cost Explorer, Cost Management, the BigQuery billing export, 
 - **Clusters on top:** nodes matched to VMs/hosts, so findings name the clusters they affect.
 
 ## What the guard allows
-Cloud CLIs: reads only; storage writes, token printing and scanners' fix modes are blocked. On-prem tools are allow-listed: `govc` info/ls/find/events/metrics (not `env`, not `vm.info -e`), `pvesh get|ls`, `qm`/`pct` list/config/status, `virsh` reads, ad-hoc `ansible` only with fact modules. `trivy k8s` must run with `--disable-node-collector`. Details and the known `ssh` limit: [SECURITY.md](../SECURITY.md). Use read-only identities: [rbac/cloud-readonly.md](rbac/cloud-readonly.md).
+Cloud CLIs: reads only; storage writes, token printing and scanners' fix modes are blocked. On-prem tools are allow-listed: `govc` info/ls/find/events/metrics (not `env`, not `vm.info -e`), `pvesh get|ls`, `qm`/`pct` list/config/status, `virsh` reads, ad-hoc `ansible` only with fact modules. `trivy k8s` must run with `--disable-node-collector`. Details and the known `ssh` limit: [SECURITY.md](https://github.com/subzone/devops-assistant/blob/main/SECURITY.md). Use read-only identities: [rbac/cloud-readonly.md](rbac/cloud-readonly.md).
 
 ## Tools
 None are required; each one adds depth. Check and install them with `k8sh doctor` and `/devops-assistant:setup` (groups **cloud**, **security**, **onprem**): [Dependencies](dependencies.md).
